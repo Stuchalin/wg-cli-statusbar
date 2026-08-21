@@ -18,6 +18,14 @@ The project is split into two targets:
 - Quick access to common WireGuard config folders.
 - Dedicated menu action **“Tunnel management (coming soon)”** as an extension point for future `up/down/restart`.
 
+## Requirements
+
+- Install WireGuard command-line tools to allow the app to read interface status:
+
+```bash
+brew install wireguard-tools
+```
+
 Localization:
 
 - `EN` and `RU` are available in `Sources/WGStatusBarCore/Resources/en.lproj` and `Sources/WGStatusBarCore/Resources/ru.lproj`.
