@@ -1,0 +1,17 @@
+.build
+.build/
+build/
+DerivedData/
+xcuserdata/
+*.xcuserstate
+*.xcworkspace/
+*.xcodeproj/project.xcworkspace/
+*.xcodeproj/xcuserdata/
+*.xcodeproj/*.xcuserstate
+.DS_Store
+*.swp
+*.swo
+*~
+.swiftpm
+.vscode/
+.cache-test/
