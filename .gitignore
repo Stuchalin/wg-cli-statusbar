@@ -15,3 +15,4 @@ xcuserdata/
 .swiftpm
 .vscode/
 .cache-test/
+.claude/
