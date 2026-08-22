@@ -58,6 +58,22 @@ swift build -c release
 .build/release/WGStatusBar
 ```
 
+App bundle:
+
+```bash
+scripts/build-app.sh          # → build/WGStatusBar.app, version 0.1.0
+scripts/build-app.sh 0.2.0    # custom version
+```
+
+Or via the Makefile: `make build` (debug), `make release` (the .app bundle), `make release VERSION=0.2.0`, `make test`, `make clean`.
+
+Notes:
+
+- The bundle is ad-hoc signed, which is enough to launch it locally on Apple Silicon. Developer ID signing, notarization and a universal build are future distribution work; `build-app.sh` is written to become the body of that CI job.
+- The SwiftPM resource bundle with localizations is copied to `Contents/Resources` (the standard location — codesign rejects anything in the `.app` root). `L10n` resolves it there; `Bundle.module` stays as the fallback for bare-binary dev runs.
+- The app icon is a generated placeholder: `scripts/make-icon.sh` redraws `Assets/AppIcon.icns` from `scripts/generate-icon.swift`. To swap in a designer icon, just replace `Assets/AppIcon.icns`.
+- Launched from Finder, the app runs without root and will show the error state in the card — reading `wg` state requires privileges (see the roadmap).
+
 ## Tests and coverage
 
 ```bash

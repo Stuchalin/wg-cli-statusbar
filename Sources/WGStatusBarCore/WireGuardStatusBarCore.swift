@@ -304,8 +304,19 @@ public final class WireGuardStatusModel: ObservableObject {
 }
 
 enum L10n {
+    // In an .app the resource bundle is copied to Contents/Resources —
+    // the standard location and the only one codesign accepts (files in the
+    // .app root make it "unsealed"). The generated Bundle.module accessor
+    // looks in the .app root instead, so it only works for bare-binary dev
+    // runs and stays as the fallback.
+    private static let bundle: Bundle = {
+        let standard = Bundle.main.resourceURL?
+            .appendingPathComponent("WGStatusBar_WGStatusBarCore.bundle")
+        return standard.flatMap(Bundle.init(url:)) ?? .module
+    }()
+
     static func string(_ key: String, _ args: String...) -> String {
-        let raw = NSLocalizedString(key, tableName: "Localizable", bundle: .module, comment: "")
+        let raw = NSLocalizedString(key, tableName: "Localizable", bundle: bundle, comment: "")
         if args.isEmpty {
             return raw
         }
