@@ -13,6 +13,94 @@ private enum WGShowError: LocalizedError {
     }
 }
 
+/// Запускает `wg show all dump` и возвращает сырой вывод; инжектится для тестов.
+public protocol WGShowCommandRunning {
+    func runDump() async throws -> String
+}
+
+/// Продакшн-раннер: `/bin/zsh -lc "wg show all dump"` (login-shell, чтобы Homebrew's
+/// `wg` был на PATH) с таймаутом. Сырой вывод содержит секреты — не логировать.
+public struct ProcessWGShowRunner: WGShowCommandRunning {
+    public init() {}
+
+    public func runDump() async throws -> String {
+        try await withCheckedThrowingContinuation { continuation in
+            Task.detached {
+                do {
+                    let output = try Self.runWGShowSync(timeout: 5.0)
+                    continuation.resume(returning: output)
+                } catch {
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    }
+
+    private static func runWGShowSync(timeout: TimeInterval) throws -> String {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-lc", "wg show all dump"]
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+        let stateQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.state")
+        var timedOut = false
+
+        try process.run()
+        let timeoutTask = DispatchWorkItem {
+            stateQueue.sync {
+                timedOut = true
+            }
+            if process.isRunning {
+                process.terminate()
+            }
+        }
+        process.terminationHandler = { _ in
+            timeoutTask.cancel()
+        }
+
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutTask)
+        process.waitUntilExit()
+
+        if stateQueue.sync(execute: { timedOut }) {
+            throw WGShowError.commandTimeout
+        }
+
+        let outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
+        let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
+
+        let output = String(data: outputData, encoding: .utf8) ?? ""
+        let errorText = String(data: errorData, encoding: .utf8) ?? ""
+
+        guard process.terminationStatus == 0 else {
+            if errorText.isEmpty {
+                throw NSError(
+                    domain: "WGStatusBar",
+                    code: Int(process.terminationStatus),
+                    userInfo: [NSLocalizedDescriptionKey: L10n.string("error.wg_show_failed", String(process.terminationStatus))]
+                )
+            }
+            throw NSError(
+                domain: "WGStatusBar",
+                code: Int(process.terminationStatus),
+                userInfo: [NSLocalizedDescriptionKey: errorText.trimmingCharacters(in: .whitespacesAndNewlines)]
+            )
+        }
+
+        return output
+    }
+}
+
+/// Именование туннелей для модели; инжектится для тестов (моки со счётчиками).
+public protocol WireGuardTunnelNaming: AnyObject {
+    func displayName(for interfaceName: String) -> String
+    func rescan()
+}
+
+extension WireGuardTunnelNamer: WireGuardTunnelNaming {}
+
 public struct StatusMenuView: View {
     @ObservedObject var model: WireGuardStatusModel
 
@@ -95,7 +183,7 @@ public struct StatusMenuView: View {
             Divider()
             HStack {
                 Button(L10n.string("button.refresh")) {
-                    model.refresh()
+                    model.refresh(forceNameRescan: true)
                 }
                 .disabled(model.isLoading)
 
@@ -129,16 +217,27 @@ public final class WireGuardStatusModel: ObservableObject {
     @Published public private(set) var isLoading = false
     @Published public private(set) var lastError: String?
 
+    private let commandRunner: WGShowCommandRunning
+    private let tunnelNamer: WireGuardTunnelNaming
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 5
 
     public init() {
+        self.commandRunner = ProcessWGShowRunner()
+        self.tunnelNamer = WireGuardTunnelNamer()
         refresh()
         startTimer()
     }
 
     internal init(testing interfaces: [WGInterface]) {
+        self.commandRunner = ProcessWGShowRunner()
+        self.tunnelNamer = WireGuardTunnelNamer()
         self.interfaces = interfaces
+    }
+
+    internal init(commandRunner: WGShowCommandRunning, tunnelNamer: WireGuardTunnelNaming) {
+        self.commandRunner = commandRunner
+        self.tunnelNamer = tunnelNamer
     }
 
     deinit {
@@ -174,14 +273,22 @@ public final class WireGuardStatusModel: ObservableObject {
         return iconPrefix
     }
 
-    public func refresh() {
+    /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);
+    /// обычный тик ресканит лениво и только встретив незнакомый utun.
+    public func refresh(forceNameRescan: Bool = false) {
         isLoading = true
         lastError = nil
 
+        let runner = commandRunner
+        let namer = tunnelNamer
         Task.detached {
             do {
-                let output = try await Self.runWGShow()
-                let parsed = parseWGShowDump(output)
+                let output = try await runner.runDump()
+                let parsed = Self.resolveDisplayNames(
+                    for: parseWGShowDump(output),
+                    namer: namer,
+                    forcingRescan: forceNameRescan
+                )
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.interfaces = parsed
@@ -195,6 +302,39 @@ public final class WireGuardStatusModel: ObservableObject {
                 }
             }
         }
+    }
+
+    /// Проставляет интерфейсам `displayName` из namer'а.
+    ///
+    /// Незнакомый utun после первого прохода — единственный исключительный
+    /// `rescan()` за refresh (между тиками мог подняться новый конфиг wg-quick),
+    /// затем повторный резолв только ещё неизвестных имён. При принудительном
+    /// рескане второго не нужно — каталог только что перечитан.
+    private static func resolveDisplayNames(
+        for interfaces: [WGInterface],
+        namer: WireGuardTunnelNaming,
+        forcingRescan: Bool
+    ) -> [WGInterface] {
+        if forcingRescan {
+            namer.rescan()
+        }
+
+        var resolved = interfaces
+        var hasUnknownName = false
+        for index in resolved.indices {
+            let displayName = namer.displayName(for: resolved[index].name)
+            hasUnknownName = hasUnknownName || displayName == resolved[index].name
+            resolved[index].displayName = displayName
+        }
+
+        if hasUnknownName && !forcingRescan {
+            namer.rescan()
+            for index in resolved.indices where resolved[index].displayName == resolved[index].name {
+                resolved[index].displayName = namer.displayName(for: resolved[index].name)
+            }
+        }
+
+        return resolved
     }
 
     public func openWireGuardConfigFolder() {
@@ -222,75 +362,6 @@ public final class WireGuardStatusModel: ObservableObject {
                 self?.refresh()
             }
         }
-    }
-
-    private static func runWGShow(timeout: TimeInterval = 5.0) async throws -> String {
-        return try await withCheckedThrowingContinuation { continuation in
-            Task.detached {
-                do {
-                    let output = try Self.runWGShowSync(timeout: timeout)
-                    continuation.resume(returning: output)
-                } catch {
-                    continuation.resume(throwing: error)
-                }
-            }
-        }
-    }
-
-    private static func runWGShowSync(timeout: TimeInterval) throws -> String {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "wg show"]
-
-        let outPipe = Pipe()
-        let errPipe = Pipe()
-        process.standardOutput = outPipe
-        process.standardError = errPipe
-        let stateQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.state")
-        var timedOut = false
-
-        try process.run()
-        let timeoutTask = DispatchWorkItem {
-            stateQueue.sync {
-                timedOut = true
-            }
-            if process.isRunning {
-                process.terminate()
-            }
-        }
-        process.terminationHandler = { _ in
-            timeoutTask.cancel()
-        }
-
-        DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutTask)
-        process.waitUntilExit()
-
-        if stateQueue.sync(execute: { timedOut }) {
-            throw WGShowError.commandTimeout
-        }
-
-        let outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
-
-        let output = String(data: outputData, encoding: .utf8) ?? ""
-        let errorText = String(data: errorData, encoding: .utf8) ?? ""
-
-        guard process.terminationStatus == 0 else {
-            if errorText.isEmpty {
-                throw NSError(
-                    domain: "WGStatusBar",
-                    code: Int(process.terminationStatus),
-                    userInfo: [NSLocalizedDescriptionKey: L10n.string("error.wg_show_failed", String(process.terminationStatus))]
-                )
-            }
-            throw NSError(
-                domain: "WGStatusBar",
-                code: Int(process.terminationStatus),
-                userInfo: [NSLocalizedDescriptionKey: errorText.trimmingCharacters(in: .whitespacesAndNewlines)]
-            )
-        }
-
-        return output
     }
 }
 

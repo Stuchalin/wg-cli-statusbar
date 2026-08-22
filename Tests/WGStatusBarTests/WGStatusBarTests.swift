@@ -9,6 +9,11 @@ final class WGStatusBarTests: XCTestCase {
         Date(timeIntervalSinceNow: -60)
     }
 
+    /// Хендшейк 5 мин назад — стареющий (между порогами 2 и 10 мин), с запасом от границ.
+    func makeAgingHandshake() -> Date {
+        Date(timeIntervalSinceNow: -5 * 60)
+    }
+
     /// Хендшейк 15 мин назад — несвежий (порог orange 10 мин), с запасом от границы.
     func makeStaleHandshake() -> Date {
         Date(timeIntervalSinceNow: -15 * 60)
@@ -210,5 +215,233 @@ final class WGStatusBarTests: XCTestCase {
 
         XCTAssertEqual(connectedModel.menuTitle, L10n.string("menu.title.on"))
         XCTAssertEqual(disconnectedModel.menuTitle, L10n.string("menu.title.off"))
+    }
+
+    /// Aging-хендшейк (−5 мин) — всё ещё «подключён»: green|orange дают active.
+    func testAgingHandshakeStillCountsAsConnected() {
+        let allAging = WireGuardStatusModel(
+            testing: [makeInterface("wg0", peers: [WGPeer(publicKey: "peer-a", latestHandshake: makeAgingHandshake())])]
+        )
+
+        XCTAssertEqual(allAging.statusText, L10n.string("status.all_connected"))
+        XCTAssertEqual(allAging.menuTitle, L10n.string("menu.title.on"))
+
+        let partlyAging = WireGuardStatusModel(
+            testing: [
+                makeInterface("wg0", peers: [WGPeer(publicKey: "peer-a", latestHandshake: makeAgingHandshake())]),
+                makeInterface("wg1", peers: [makeNeverPeer("peer-b")]),
+            ]
+        )
+
+        XCTAssertEqual(partlyAging.statusText, L10n.string("status.connected_count", "1", "2"))
+        XCTAssertEqual(partlyAging.menuTitle, L10n.string("menu.title.on"))
+    }
+
+    // MARK: - Модель: refresh — dump-команда и displayName из namer
+
+    func makeInterfaceDumpLine(_ name: String) -> String {
+        "\(name)\tSECRET_IFACE_PRIVATE_KEY\tiface-pub-key=\t(none)\t(none)"
+    }
+
+    func makePeerDumpLine(interfaceName: String, key: String = "peer-a-pub-key=", handshakeSecondsAgo: Int?) -> String {
+        let epoch = handshakeSecondsAgo.map { Int(Date().timeIntervalSince1970) - $0 } ?? 0
+        return "\(interfaceName)\t\(key)\t(none)\t203.0.113.10:51820\t0.0.0.0/0\t\(epoch)\t897500\t123456\toff"
+    }
+
+    func makeDump(_ lines: [String]) -> String {
+        lines.joined(separator: "\n")
+    }
+
+    /// Прокручивает main run loop, пока условие не станет true (MainActor-апдейты модели).
+    func waitUntil(_ condition: () -> Bool, _ message: String, timeout: TimeInterval = 2) {
+        let deadline = Date().addingTimeInterval(timeout)
+        while !condition() && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertTrue(condition(), message)
+    }
+
+    func testRefreshParsesDumpAndResolvesKnownName() {
+        let namer = MockTunnelNamer(knownNames: ["utun3": "work-vpn"])
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun3"),
+                    makePeerDumpLine(interfaceName: "utun3", handshakeSecondsAgo: 60),
+                ])),
+            ]),
+            tunnelNamer: namer
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertEqual(model.interfaces.count, 1)
+        XCTAssertEqual(model.interfaces[0].name, "utun3")
+        XCTAssertEqual(model.interfaces[0].displayName, "work-vpn", "displayName должен прийти из namer")
+        XCTAssertEqual(model.interfaces[0].peers[0].rxBytes, 897_500)
+        XCTAssertEqual(model.interfaces[0].peers[0].txBytes, 123_456)
+        XCTAssertEqual(model.menuTitle, L10n.string("menu.title.on"), "хендшейк 60 с назад — fresh → подключён")
+        XCTAssertEqual(namer.rescanCount, 0, "знакомый utun не должен вызывать rescan")
+    }
+
+    func testRefreshRescansExactlyOnceForUnknownTunnel() {
+        let namer = MockTunnelNamer(namesDiscoveredOnRescan: ["utun9": "home-vpn"])
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun9"),
+                    makePeerDumpLine(interfaceName: "utun9", handshakeSecondsAgo: 60),
+                ])),
+            ]),
+            tunnelNamer: namer
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertEqual(model.interfaces[0].displayName, "home-vpn", "после rescan имя должно резолвиться")
+        XCTAssertEqual(namer.rescanCount, 1, "для неизвестного utun — ровно один rescan")
+    }
+
+    func testRefreshSingleRescanForMultipleUnknownTunnels() {
+        let namer = MockTunnelNamer(namesDiscoveredOnRescan: ["utun9": "home-vpn", "utun10": "office-vpn"])
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun9"),
+                    makePeerDumpLine(interfaceName: "utun9", handshakeSecondsAgo: 60),
+                    makeInterfaceDumpLine("utun10"),
+                    makePeerDumpLine(interfaceName: "utun10", key: "peer-b-pub-key=", handshakeSecondsAgo: nil),
+                ])),
+            ]),
+            tunnelNamer: namer
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        let displayNames = model.interfaces.map(\.displayName)
+        XCTAssertEqual(displayNames, ["home-vpn", "office-vpn"])
+        XCTAssertEqual(namer.rescanCount, 1, "rescan один за refresh, а не по одному на интерфейс")
+    }
+
+    func testRefreshForcedRescanPicksUpRenamedConfig() {
+        let namer = MockTunnelNamer(knownNames: ["utun3": "old-name"], namesDiscoveredOnRescan: ["utun3": "work-vpn"])
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun3"),
+                    makePeerDumpLine(interfaceName: "utun3", handshakeSecondsAgo: 60),
+                ])),
+            ]),
+            tunnelNamer: namer
+        )
+
+        model.refresh(forceNameRescan: true)
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertEqual(model.interfaces[0].displayName, "work-vpn", "принудительный rescan должен заменить закэшированное имя")
+        XCTAssertEqual(namer.rescanCount, 1, "принудительный refresh — ровно один rescan")
+    }
+
+    func testRefreshForcedRescanStillUnknownStaysRaw() {
+        let namer = MockTunnelNamer()
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun9"),
+                    makePeerDumpLine(interfaceName: "utun9", handshakeSecondsAgo: 60),
+                ])),
+            ]),
+            tunnelNamer: namer
+        )
+
+        model.refresh(forceNameRescan: true)
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertEqual(model.interfaces[0].displayName, "utun9", "незнакомый utun — fallback на сырое имя")
+        XCTAssertEqual(namer.rescanCount, 1, "после принудительного rescan повторного быть не должно")
+    }
+
+    func testRefreshKeepsLastGoodDataOnError() {
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun3"),
+                    makePeerDumpLine(interfaceName: "utun3", handshakeSecondsAgo: 60),
+                ])),
+                .failure(NSError(domain: "WGStatusBarTests", code: 1)),
+            ]),
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "work-vpn"])
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "первый refresh должен завершиться")
+        XCTAssertEqual(model.interfaces.count, 1)
+
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastError != nil }, "ошибочный refresh должен завершиться с lastError")
+
+        XCTAssertNotNil(model.lastError, "ошибка команды должна попасть в lastError")
+        XCTAssertEqual(model.interfaces.count, 1, "данные последнего успешного тика должны остаться")
+        XCTAssertEqual(model.interfaces[0].displayName, "work-vpn")
+    }
+}
+
+/// Стаб-раннер команды с запрограммированной очередью результатов.
+private final class StubCommandRunner: WGShowCommandRunning {
+    private let lock = NSLock()
+    private var results: [Result<String, Error>]
+
+    init(results: [Result<String, Error>]) {
+        self.results = results
+    }
+
+    func runDump() async throws -> String {
+        lock.lock()
+        let result = results.isEmpty ? .success("") : results.removeFirst()
+        lock.unlock()
+
+        switch result {
+        case .success(let output):
+            return output
+        case .failure(let error):
+            throw error
+        }
+    }
+}
+
+/// Мок-namer со счётчиком rescan'ов; на rescan «обнаруживает» новые имена.
+private final class MockTunnelNamer: WireGuardTunnelNaming {
+    private let lock = NSLock()
+    private var knownNames: [String: String]
+    private let namesDiscoveredOnRescan: [String: String]
+    private var rescanCountStorage = 0
+
+    init(knownNames: [String: String] = [:], namesDiscoveredOnRescan: [String: String] = [:]) {
+        self.knownNames = knownNames
+        self.namesDiscoveredOnRescan = namesDiscoveredOnRescan
+    }
+
+    var rescanCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return rescanCountStorage
+    }
+
+    func displayName(for interfaceName: String) -> String {
+        lock.lock()
+        defer { lock.unlock() }
+        return knownNames[interfaceName] ?? interfaceName
+    }
+
+    func rescan() {
+        lock.lock()
+        defer { lock.unlock() }
+        rescanCountStorage += 1
+        for (interfaceName, name) in namesDiscoveredOnRescan {
+            knownNames[interfaceName] = name
+        }
     }
 }
