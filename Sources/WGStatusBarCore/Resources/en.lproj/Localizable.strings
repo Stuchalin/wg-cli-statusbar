@@ -17,3 +17,7 @@
 "error.config_folder_not_found" = "WireGuard config folder was not found";
 "error.wg_show_failed" = "Command `wg show` finished with code %@";
 "error.wg_show_timeout" = "Command `wg show` timed out";
+"ago.seconds" = "%@ s ago";
+"ago.minutes" = "%@ min ago";
+"ago.hours" = "%@ h ago";
+"ago.days" = "%@ d ago";

@@ -17,3 +17,7 @@
 "error.config_folder_not_found" = "Не найден каталог с конфигами WireGuard";
 "error.wg_show_failed" = "Команда `wg show` завершилась с кодом %@";
 "error.wg_show_timeout" = "Время ожидания команды `wg show` истекло";
+"ago.seconds" = "%@ с назад";
+"ago.minutes" = "%@ мин назад";
+"ago.hours" = "%@ ч назад";
+"ago.days" = "%@ дн назад";

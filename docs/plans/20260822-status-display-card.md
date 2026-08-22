@@ -86,12 +86,12 @@
 - Create: `Sources/WGStatusBarCore/Formatters.swift`
 - Create: `Tests/WGStatusBarTests/FormattersTests.swift`
 
-- [ ] тест: байты — 0, 512 B, «876 KiB» (876.48·1024 ≈ 897500 байт), 1.5 MiB, 3 GiB; бинарные единицы (1024)
-- [ ] реализация `formatBytes(UInt64) -> String` (KiB/MiB/GiB; дробная часть: <10 единиц → до одного знака с отбрасывом хвостовых нулей («3 GiB», «1.5 MiB»), ≥10 → 0 знаков)
-- [ ] тест: «N назад» — 57 сек; 3 мин; 1 ч 5 мин; 2 ч; сутки+
-- [ ] реализация `formatAgo(Date, now:) -> String` с локализованными ключами `ago.seconds/minutes/hours/days`; числа передаются строкой, плейсхолдер только `%@` (как `status.connected_count`), `L10n` не расширять
-- [ ] добавить ключи `ago.*` (включая `ago.days`) в en и ru `Localizable.strings`
-- [ ] `swift test` — зелёные
+- [x] тест: байты — 0, 512 B, «876 KiB» (876.48·1024 ≈ 897500 байт), 1.5 MiB, 3 GiB; бинарные единицы (1024)
+- [x] реализация `formatBytes(UInt64) -> String` (KiB/MiB/GiB; дробная часть: <10 единиц → до одного знака с отбрасывом хвостовых нулей («3 GiB», «1.5 MiB»), ≥10 → 0 знаков)
+- [x] тест: «N назад» — 57 сек; 3 мин; 1 ч 5 мин; 2 ч; сутки+
+- [x] реализация `formatAgo(Date, now:) -> String` с локализованными ключами `ago.seconds/minutes/hours/days`; числа передаются строкой, плейсхолдер только `%@` (как `status.connected_count`), `L10n` не расширять
+- [x] добавить ключи `ago.*` (включая `ago.days`) в en и ru `Localizable.strings`
+- [x] `swift test` — зелёные
 
 ### Task 3: Модель и парсер `wg show all dump`
 
