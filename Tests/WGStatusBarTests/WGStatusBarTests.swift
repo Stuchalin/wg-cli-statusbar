@@ -387,6 +387,30 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(model.interfaces.count, 1, "данные последнего успешного тика должны остаться")
         XCTAssertEqual(model.interfaces[0].displayName, "work-vpn")
     }
+
+    // MARK: - Гигиена ключей после удаления StatusMenuView
+
+    /// Ключи, которые использовал только удалённый `StatusMenuView`, не должны
+    /// оставаться в таблицах — иначе таблицы копят мёртвые строки.
+    func testRemovedStatusMenuViewKeysAreGoneFromBothLocalizations() throws {
+        let removedKeys = [
+            "app.title", "state.connected", "state.disconnected",
+            "peers.not_found", "peer.handshake", "peer.handshake_unknown",
+        ]
+
+        for language in ["en", "ru"] {
+            let lprojPath = try XCTUnwrap(
+                Bundle.module.path(forResource: language, ofType: "lproj"),
+                "нет \(language).lproj в бандле модуля"
+            )
+            let bundle = Bundle(path: lprojPath)
+            for key in removedKeys {
+                // localizedString(forKey:value:) при отсутствии ключа возвращает value
+                let raw = bundle?.localizedString(forKey: key, value: key, table: "Localizable")
+                XCTAssertEqual(raw, key, "мёртвый ключ \(key) должен быть удалён из \(language)")
+            }
+        }
+    }
 }
 
 /// Стаб-раннер команды с запрограммированной очередью результатов.

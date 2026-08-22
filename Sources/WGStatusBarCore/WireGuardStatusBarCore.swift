@@ -1,6 +1,6 @@
 import AppKit
+import Combine
 import Foundation
-import SwiftUI
 
 private enum WGShowError: LocalizedError {
     case commandTimeout
@@ -101,117 +101,6 @@ public protocol WireGuardTunnelNaming: AnyObject {
 
 extension WireGuardTunnelNamer: WireGuardTunnelNaming {}
 
-public struct StatusMenuView: View {
-    @ObservedObject var model: WireGuardStatusModel
-
-    public init(model: WireGuardStatusModel) {
-        self.model = model
-    }
-
-    public var body: some View {
-        VStack(spacing: 10) {
-            HStack {
-                Image(systemName: model.menuIcon)
-                .foregroundStyle(model.statusColor)
-                .font(.title2)
-                VStack(alignment: .leading, spacing: 2) {
-                    Text(L10n.string("app.title"))
-                        .font(.headline)
-                    Text(model.statusText)
-                        .font(.caption)
-                        .foregroundStyle(.secondary)
-                }
-            }
-
-            if let error = model.lastError {
-                Text(error)
-                    .font(.caption)
-                    .foregroundStyle(.red)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-            }
-
-            Divider()
-
-            if model.interfaces.isEmpty {
-                Text(L10n.string("status.no_interfaces"))
-                    .font(.caption)
-                    .foregroundStyle(.secondary)
-            } else {
-                ForEach(model.interfaces) { interface in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Text(interface.displayName)
-                                .font(.subheadline)
-                                .bold()
-                            Spacer()
-                            Text(interface.isConnected ? L10n.string("state.connected") : L10n.string("state.disconnected"))
-                                .font(.caption)
-                                .foregroundStyle(interface.isConnected ? .green : .secondary)
-                        }
-
-                        if interface.peers.isEmpty {
-                            Text(L10n.string("peers.not_found"))
-                                .font(.caption2)
-                                .foregroundStyle(.secondary)
-                        } else {
-                            ForEach(interface.peers) { peer in
-                                VStack(alignment: .leading, spacing: 2) {
-                                    Text(peer.publicKey)
-                                        .font(.caption2)
-                                        .lineLimit(1)
-                                        .truncationMode(.middle)
-                                    Text("↓ \(Formatters.formatBytes(peer.rxBytes))  ↑ \(Formatters.formatBytes(peer.txBytes))")
-                                        .font(.caption2)
-                                        .monospacedDigit()
-                                        .foregroundStyle(.secondary)
-                                    if let handshake = peer.latestHandshake {
-                                        Text(L10n.string("peer.handshake", Formatters.formatAgo(handshake)))
-                                            .font(.caption2)
-                                            .foregroundStyle(peer.isActive ? .green : .secondary)
-                                    } else {
-                                        Text(L10n.string("peer.handshake_unknown"))
-                                            .font(.caption2)
-                                            .foregroundStyle(.secondary)
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            Divider()
-            HStack {
-                Button(L10n.string("button.refresh")) {
-                    model.refresh(forceNameRescan: true)
-                }
-                .disabled(model.isLoading)
-
-                if model.isLoading {
-                    ProgressView()
-                        .scaleEffect(0.65)
-                }
-            }
-
-            Button(L10n.string("button.open_configs")) {
-                model.openWireGuardConfigFolder()
-            }
-
-            Button(L10n.string("button.tunnel_management_soon")) {}
-                .foregroundStyle(.secondary)
-                .disabled(true)
-
-            Divider()
-
-            Button(L10n.string("button.quit")) {
-                NSApplication.shared.terminate(nil)
-            }
-        }
-        .padding()
-        .frame(width: 320)
-    }
-}
-
 public final class WireGuardStatusModel: ObservableObject {
     @Published public private(set) var interfaces: [WGInterface] = []
     @Published public private(set) var isLoading = false
@@ -250,20 +139,6 @@ public final class WireGuardStatusModel: ObservableObject {
         if activeCount == 0 { return L10n.string("status.no_active_connections") }
         if activeCount == interfaces.count { return L10n.string("status.all_connected") }
         return L10n.string("status.connected_count", String(activeCount), String(interfaces.count))
-    }
-
-    public var menuIcon: String {
-        if interfaces.contains(where: \.isConnected) {
-            return "lock.fill"
-        }
-        return "lock.slash"
-    }
-
-    public var statusColor: Color {
-        if interfaces.contains(where: \.isConnected) {
-            return .green
-        }
-        return .secondary
     }
 
     public var menuTitle: String {

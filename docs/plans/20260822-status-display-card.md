@@ -173,10 +173,10 @@
 - Modify: `Sources/WGStatusBarCore/Resources/en.lproj/Localizable.strings`
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 
-- [ ] `main.swift`: без `@main`; `NSApplication` + `AppDelegate` (создаёт модель и `StatusItemController`), `setActivationPolicy(.accessory)`, `app.run()`
-- [ ] удалить `StatusMenuView` и ставшие ненужными импорты; вычистить неиспользуемые артефакты: `menuIcon`/`statusColor` (если не нужны карточке), ключи `peer.handshake*`, `state.connected`, `peers.not_found`, `app.title` из en/ru (проверить использование, удалить неиспользуемые)
-- [ ] `swift build` и `swift test` — зелёные
-- [ ] короткое ручное smoke-запуск на этой машине: приложение стартует, показывает статус-айтел и ошибку `wg show` (wg отсутствует — ожидаемо)
+- [x] `main.swift`: без `@main`; `NSApplication` + `AppDelegate` (создаёт модель и `StatusItemController`), `setActivationPolicy(.accessory)`, `app.run()`
+- [x] удалить `StatusMenuView` и ставшие ненужными импорты; вычистить неиспользуемые артефакты: `menuIcon`/`statusColor` (если не нужны карточке), ключи `peer.handshake*`, `state.connected`, `peers.not_found`, `app.title` из en/ru (проверить использование, удалить неиспользуемые)
+- [x] `swift build` и `swift test` — зелёные
+- [x] короткое ручное smoke-запуск на этой машине: приложение стартует, показывает статус-айтел и ошибку `wg show` (wg отсутствует — ожидаемо)
 
 ### Task 9: Проверка критериев приёмки
 

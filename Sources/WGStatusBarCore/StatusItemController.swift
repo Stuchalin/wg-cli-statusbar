@@ -123,8 +123,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     /// Тайтл статус-айтема от состояния модели: `wg: on`, когда хоть один интерфейс подключён.
-    /// Дублирует правило `WireGuardStatusModel.menuTitle` — после удаления
-    /// `StatusMenuView` останется единственной проекцией тайтла.
+    /// Дублирует правило `WireGuardStatusModel.menuTitle` — изолирована от AppKit для тестов.
     static func statusTitle(interfaces: [WGInterface]) -> String {
         interfaces.contains(where: \.isConnected)
             ? L10n.string("menu.title.on")

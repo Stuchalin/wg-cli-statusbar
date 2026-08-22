@@ -1,13 +1,7 @@
-"app.title" = "WireGuard";
 "status.no_interfaces" = "No interfaces";
 "status.no_active_connections" = "No active connections";
 "status.all_connected" = "All connected";
 "status.connected_count" = "Connected %@ of %@";
-"state.connected" = "Connected";
-"state.disconnected" = "Disconnected";
-"peers.not_found" = "Peers: none";
-"peer.handshake" = "Handshake: %@";
-"peer.handshake_unknown" = "Handshake: unknown";
 "button.refresh" = "Refresh";
 "button.open_configs" = "Open WireGuard configs";
 "button.tunnel_management_soon" = "Tunnel management (coming soon)";
