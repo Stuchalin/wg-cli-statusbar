@@ -1,17 +1,18 @@
-import SwiftUI
+import AppKit
 import WGStatusBarCore
 
-@main
-struct WGStatusBarApp: App {
-    @StateObject private var model = WireGuardStatusModel()
+/// Владеет моделью и статус-айтемом; без окна — приложение только меню-бара.
+final class AppDelegate: NSObject, NSApplicationDelegate {
+    private let model = WireGuardStatusModel()
+    private var statusItemController: StatusItemController?
 
-    var body: some Scene {
-        MenuBarExtra(model.menuTitle, systemImage: model.menuIcon) {
-            StatusMenuView(model: model)
-        }
-        .menuBarExtraStyle(.menu)
-        Settings {
-            EmptyView()
-        }
+    func applicationDidFinishLaunching(_ notification: Notification) {
+        statusItemController = StatusItemController(model: model)
     }
 }
+
+let app = NSApplication.shared
+let delegate = AppDelegate()
+app.delegate = delegate
+app.setActivationPolicy(.accessory)
+app.run()
