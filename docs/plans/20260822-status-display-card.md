@@ -143,14 +143,14 @@
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 - Create: `Tests/WGStatusBarTests/StatusCardViewModelTests.swift`
 
-- [ ] тест view-model карточки: строки интерфейса (имя+точка цвета), тексты трафика и хендшейка, показ pubkey только при >1 пире
-- [ ] тест view-model карточки: выбор «весь трафик»/список подсетей (при нескольких пирах с разными scope — приоритет full-tunnel на уровне интерфейса)
-- [ ] тест view-model карточки: empty-state — `interfaces.isEmpty` → строка `status.no_interfaces` (потребитель `statusText` — карточка, отдельного view больше нет)
-- [ ] реализация view-model (чистый тип, тестируемый) + тонкий `StatusCardView` поверх неё
-- [ ] верстка: заголовок (displayName headline + utun secondary), endpoint, allowed-ips строка, `↓/↑` трафик `.monospacedDigit()`, хендшейк цветом свежести, спиннер isLoading, красная caption lastError
-- [ ] ⓘ-легенда: in-place toggle, локализованные 3 строки легенды; пересборка меню через колбэк
-- [ ] новые ключи в en+ru (`legend.*`, `badge.full_tunnel`, `peer.*` и пр.)
-- [ ] `swift test` — зелёные
+- [x] тест view-model карточки: строки интерфейса (имя+точка цвета), тексты трафика и хендшейка, показ pubkey только при >1 пире
+- [x] тест view-model карточки: выбор «весь трафик»/список подсетей (при нескольких пирах с разными scope — приоритет full-tunnel на уровне интерфейса)
+- [x] тест view-model карточки: empty-state — `interfaces.isEmpty` → строка `status.no_interfaces` (потребитель `statusText` — карточка, отдельного view больше нет)
+- [x] реализация view-model (чистый тип, тестируемый) + тонкий `StatusCardView` поверх неё
+- [x] верстка: заголовок (displayName headline + utun secondary), endpoint, allowed-ips строка, `↓/↑` трафик `.monospacedDigit()`, хендшейк цветом свежести, спиннер isLoading, красная caption lastError
+- [x] ⓘ-легенда: in-place toggle, локализованные 3 строки легенды; пересборка меню через колбэк
+- [x] новые ключи в en+ru (`legend.*`, `badge.full_tunnel`, `peer.*` и пр.)
+- [x] `swift test` — зелёные
 
 ### Task 7: StatusItemController — NSStatusItem + NSMenu
 

@@ -1,0 +1,275 @@
+import SwiftUI
+
+/// Чистые данные карточки статуса: считаются из модели без UI, тестируются юнит-тестами.
+///
+/// `StatusCardView` — тонкая вёрстка поверх этого типа; имена полей view-модели —
+/// готовые строки для отображения.
+public struct StatusCardViewModel: Equatable {
+    /// Пир в карточке: endpoint, трафик, хендшейк; pubkey — источник идентификатора,
+    /// показывается укороченным только когда у интерфейса больше одного пира.
+    public struct Peer: Identifiable, Equatable {
+        public let id: String
+        public let publicKey: String
+        public let endpoint: String?
+        /// «↓ N KiB  ↑ N KiB» одной строкой.
+        public let trafficText: String
+        /// «N назад»; nil = never — текст подставляет вью.
+        public let handshakeText: String?
+        public let freshness: HandshakeFreshness
+
+        init(_ peer: WGPeer, now: Date) {
+            self.id = peer.publicKey
+            self.publicKey = peer.publicKey
+            self.endpoint = peer.endpoint
+            self.trafficText = "↓ \(Formatters.formatBytes(peer.rxBytes))  ↑ \(Formatters.formatBytes(peer.txBytes))"
+            self.handshakeText = peer.latestHandshake.map { Formatters.formatAgo($0, now: now) }
+            self.freshness = HandshakeFreshness.freshness(date: peer.latestHandshake, now: now)
+        }
+    }
+
+    /// Интерфейс в карточке: заголовок (точка + имена) и маршрутизация уровня интерфейса.
+    public struct Interface: Identifiable, Equatable {
+        public let id: String
+        /// Человекочитаемое имя (имя конфига wg-quick).
+        public let displayName: String
+        /// Сырое имя интерфейса (`utun3`) — показывается мелко под заголовком.
+        public let name: String
+        /// Цвет точки заголовка: fresh — green, aging — orange, stale/never — secondary.
+        /// При нескольких пирах — самый свежий хендшейк.
+        public let freshness: HandshakeFreshness
+        /// Маршрутизация уровня интерфейса: любой пир с default route → fullTunnel.
+        public let routeScope: RouteScope
+        /// Бейдж «весь трафик» или список подсетей одной строкой; nil — маршрутов нет.
+        public let routeText: String?
+        public let peers: [Peer]
+
+        /// Pubkey пиров показывается только при >1 пире — иначе один очевиден.
+        public var showsPublicKeys: Bool {
+            peers.count > 1
+        }
+
+        init(_ interface: WGInterface, now: Date) {
+            self.id = interface.name
+            self.displayName = interface.displayName
+            self.name = interface.name
+            self.freshness = Self.freshest(
+                of: interface.peers.map { HandshakeFreshness.freshness(date: $0.latestHandshake, now: now) }
+            )
+            self.peers = interface.peers.map { Peer($0, now: now) }
+
+            let scopes = interface.peers.map { RouteScope(allowedIps: $0.allowedIps) }
+            if scopes.contains(.fullTunnel) {
+                self.routeScope = .fullTunnel
+                self.routeText = L10n.string("badge.full_tunnel")
+            } else if scopes.contains(.splitTunnel) {
+                self.routeScope = .splitTunnel
+                self.routeText = Self.subnetList(of: interface.peers)
+            } else {
+                self.routeScope = .none
+                self.routeText = nil
+            }
+        }
+
+        /// Самая свежая из свежестей пиров (fresh > aging > stale > never); пусто → never.
+        private static func freshest(of values: [HandshakeFreshness]) -> HandshakeFreshness {
+            let rank: [HandshakeFreshness: Int] = [.fresh: 0, .aging: 1, .stale: 2, .never: 3]
+            return values.min { (rank[$0] ?? 3) < (rank[$1] ?? 3) } ?? .never
+        }
+
+        /// Подсети всех пиров одной строкой, без дублей, в порядке первого появления.
+        private static func subnetList(of peers: [WGPeer]) -> String? {
+            var seen: Set<String> = []
+            var ordered: [String] = []
+            for peer in peers {
+                for entry in (peer.allowedIps ?? "").split(separator: ",") {
+                    let subnet = entry.trimmingCharacters(in: .whitespacesAndNewlines)
+                    let defaultRoutes: Set<String> = ["0.0.0.0/0", "::/0"]
+                    guard !subnet.isEmpty, subnet != "(none)", !defaultRoutes.contains(subnet) else { continue }
+                    if seen.insert(subnet).inserted {
+                        ordered.append(subnet)
+                    }
+                }
+            }
+            return ordered.isEmpty ? nil : ordered.joined(separator: ", ")
+        }
+    }
+
+    public let interfaces: [Interface]
+    public let isLoading: Bool
+    public let errorMessage: String?
+
+    public init(
+        interfaces: [WGInterface],
+        isLoading: Bool = false,
+        errorMessage: String? = nil,
+        now: Date = Date()
+    ) {
+        self.interfaces = interfaces.map { Interface($0, now: now) }
+        self.isLoading = isLoading
+        self.errorMessage = errorMessage
+    }
+
+    /// Строка пустого состояния (интерфейсов нет); nil — когда есть что показать.
+    public var emptyStateText: String? {
+        interfaces.isEmpty ? L10n.string("status.no_interfaces") : nil
+    }
+
+    /// Укороченный pubkey для показа при нескольких пирах: голова + … + хвост.
+    public static func shortPublicKey(_ key: String) -> String {
+        guard key.count > 12 else { return key }
+        return key.prefix(8) + "…" + key.suffix(4)
+    }
+}
+
+/// Карточка статуса для первого пункта NSMenu (Task 7 вставит её в `NSHostingView`).
+///
+/// `onContentChange` вызывается, когда содержимое меняет высоту (ⓘ-легенда) —
+/// владелец меню пересобирает его по этому колбэку.
+public struct StatusCardView: View {
+    @ObservedObject private var model: WireGuardStatusModel
+    private let onContentChange: () -> Void
+    @State private var isLegendVisible = false
+
+    public init(model: WireGuardStatusModel, onContentChange: @escaping () -> Void = {}) {
+        self.model = model
+        self.onContentChange = onContentChange
+    }
+
+    public var body: some View {
+        let card = StatusCardViewModel(
+            interfaces: model.interfaces,
+            isLoading: model.isLoading,
+            errorMessage: model.lastError
+        )
+
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 8) {
+                Spacer()
+                if card.isLoading {
+                    ProgressView()
+                        .controlSize(.small)
+                }
+                Button {
+                    isLegendVisible.toggle()
+                    onContentChange()
+                } label: {
+                    Image(systemName: "info.circle")
+                }
+                .buttonStyle(.borderless)
+                .accessibilityLabel(Text(L10n.string("legend.toggle")))
+            }
+
+            if let error = card.errorMessage {
+                Text(error)
+                    .font(.caption)
+                    .foregroundStyle(.red)
+                    .lineLimit(2)
+            }
+
+            if let emptyText = card.emptyStateText {
+                Text(emptyText)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            } else {
+                ForEach(card.interfaces) { interface in
+                    interfaceSection(interface)
+                }
+            }
+
+            if isLegendVisible {
+                legend
+            }
+        }
+        .padding(12)
+        .frame(width: 320)
+    }
+
+    private func interfaceSection(_ interface: StatusCardViewModel.Interface) -> some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack(spacing: 8) {
+                Circle()
+                    .fill(color(for: interface.freshness))
+                    .frame(width: 10, height: 10)
+                VStack(alignment: .leading, spacing: 1) {
+                    Text(interface.displayName)
+                        .font(.headline)
+                    Text(interface.name)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                }
+                Spacer()
+            }
+
+            if let routeText = interface.routeText {
+                if interface.routeScope == .fullTunnel {
+                    Text(routeText)
+                        .font(.caption2)
+                        .padding(.horizontal, 6)
+                        .padding(.vertical, 2)
+                        .background(Capsule().fill(Color.secondary.opacity(0.15)))
+                } else {
+                    Text(routeText)
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                        .truncationMode(.middle)
+                }
+            }
+
+            ForEach(interface.peers) { peer in
+                peerSection(peer, showsPublicKey: interface.showsPublicKeys)
+            }
+        }
+    }
+
+    private func peerSection(_ peer: StatusCardViewModel.Peer, showsPublicKey: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            if showsPublicKey {
+                Text(StatusCardViewModel.shortPublicKey(peer.publicKey))
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+            }
+            if let endpoint = peer.endpoint {
+                Text(endpoint)
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+            }
+            Text(peer.trafficText)
+                .font(.caption)
+                .monospacedDigit()
+                .foregroundStyle(.secondary)
+            Text(peer.handshakeText ?? L10n.string("peer.handshake_never"))
+                .font(.caption)
+                .foregroundStyle(color(for: peer.freshness))
+        }
+    }
+
+    private var legend: some View {
+        VStack(alignment: .leading, spacing: 4) {
+            legendRow(color: .green, text: L10n.string("legend.fresh"))
+            legendRow(color: .orange, text: L10n.string("legend.aging"))
+            legendRow(color: Color.secondary, text: L10n.string("legend.stale"))
+        }
+    }
+
+    private func legendRow(color: Color, text: String) -> some View {
+        HStack(spacing: 6) {
+            Circle()
+                .fill(color)
+                .frame(width: 6, height: 6)
+            Text(text)
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+        }
+    }
+
+    private func color(for freshness: HandshakeFreshness) -> Color {
+        switch freshness {
+        case .fresh: .green
+        case .aging: .orange
+        case .stale, .never: .secondary
+        }
+    }
+}

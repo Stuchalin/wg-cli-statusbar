@@ -21,3 +21,9 @@
 "ago.minutes" = "%@ min ago";
 "ago.hours" = "%@ h ago";
 "ago.days" = "%@ d ago";
+"badge.full_tunnel" = "All traffic";
+"peer.handshake_never" = "No handshake yet";
+"legend.toggle" = "Handshake freshness legend";
+"legend.fresh" = "Active — handshake within 2 min";
+"legend.aging" = "Idle — handshake 2–10 min ago";
+"legend.stale" = "Offline — handshake over 10 min ago";
