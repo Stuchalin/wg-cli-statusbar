@@ -161,4 +161,28 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(quit.keyEquivalentModifierMask, .command)
         XCTAssertEqual(quit.tag, StatusMenuAction.quit.rawValue)
     }
+
+    // MARK: - Иконки меню-бара: загрузка из бандла, template, размер
+
+    func testBothIconsLoadFromBundle() {
+        XCTAssertNotNil(StatusIcon.image(connected: true), "StatusIconOn.pdf должен лежать в ресурсах бандла")
+        XCTAssertNotNil(StatusIcon.image(connected: false), "StatusIconOff.pdf должен лежать в ресурсах бандла")
+    }
+
+    func testIconsAreTemplate() {
+        // template обязателен: иконки нарисованы белым, без флага они невидимы в светлой теме
+        XCTAssertEqual(StatusIcon.on?.isTemplate, true)
+        XCTAssertEqual(StatusIcon.off?.isTemplate, true)
+    }
+
+    func testIconSizeMatchesMediaBox() {
+        // 18×18 из MediaBox PDF — штатный размер иконки меню-бара
+        XCTAssertEqual(StatusIcon.on?.size, NSSize(width: 18, height: 18))
+        XCTAssertEqual(StatusIcon.off?.size, NSSize(width: 18, height: 18))
+    }
+
+    func testImageMappingByConnectionState() {
+        XCTAssertTrue(StatusIcon.image(connected: true) === StatusIcon.on)
+        XCTAssertTrue(StatusIcon.image(connected: false) === StatusIcon.off)
+    }
 }

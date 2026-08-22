@@ -179,7 +179,7 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(makeInterface("wg2", peers: []).isConnected)
     }
 
-    // MARK: - Модель: menuTitle
+    // MARK: - Модель: menuTitle и isAnyConnected
 
     func testMenuTitleWhenActiveAndInactive() {
         let connectedModel = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeActivePeer("peer-a")])])
@@ -189,6 +189,10 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(connectedModel.menuTitle, L10n.string("menu.title.on"))
         XCTAssertEqual(disconnectedModel.menuTitle, L10n.string("menu.title.off"))
         XCTAssertEqual(emptyModel.menuTitle, L10n.string("menu.title.off"))
+
+        XCTAssertTrue(connectedModel.isAnyConnected)
+        XCTAssertFalse(disconnectedModel.isAnyConnected)
+        XCTAssertFalse(emptyModel.isAnyConnected)
     }
 
     /// Aging-хендшейк (−5 мин) — всё ещё «подключён»: green|orange дают active.

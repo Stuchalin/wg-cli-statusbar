@@ -195,10 +195,13 @@ public final class WireGuardStatusModel: ObservableObject {
         timer?.invalidate()
     }
 
-    public var menuTitle: String {
+    /// Хотя бы один интерфейс подключён — состояние иконки меню-бара.
+    public var isAnyConnected: Bool {
         interfaces.contains(where: \.isConnected)
-            ? L10n.string("menu.title.on")
-            : L10n.string("menu.title.off")
+    }
+
+    public var menuTitle: String {
+        isAnyConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);

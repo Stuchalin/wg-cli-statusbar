@@ -32,7 +32,7 @@ Two targets (see `Package.swift`); note directory names don't match target names
     - `Formatters.swift` — `formatBytes` (binary KiB/MiB/GiB) and `formatAgo` ("N ago").
     - `WireGuardTunnelNamer.swift` — resolves `utun2` → wg-quick config name (`work-vpn`) from `/var/run/wireguard/*.name` validated by an adjacent `<utun>.sock` with consistent mtime (|Δ| < 2 s, mirroring `get_real_interface` from wg-quick's darwin.bash — the sock is per-interface, so a recreated sock exposes a lingering stale `.name` on a reused utun); lock-protected cache with per-lookup re-validation of the `.name`/`.sock` pair (a reused utun must not show a stale config name), injectable file system.
     - `StatusCardView.swift` — `StatusCardViewModel` (pure, tested) + thin SwiftUI `StatusCardView`.
-    - `StatusItemController.swift` — owns `NSStatusItem` and `NSMenu`; menu structure as data (`StatusMenuStructure`/`StatusMenuFactory`, tested) + `CardMenuItem` (native highlight disabled).
+    - `StatusItemController.swift` — owns `NSStatusItem` and `NSMenu`; menu structure as data (`StatusMenuStructure`/`StatusMenuFactory`, tested) + `CardMenuItem` (native highlight disabled) + `StatusIcon` (menu-bar PDF icons, template).
 
 Data flow: `WireGuardStatusModel.refresh()` runs `/bin/zsh -lc "wg show all dump"` (login shell so Homebrew's `wg` is found on PATH) on a detached task with a 5s timeout, parses via `parseWGShowDump`, resolves `displayName`s through the namer (lazy rescan only for an unknown utun; `forceNameRescan: true` from the ⌘R menu item), then updates `@Published` state on the main actor. A `Timer` re-fires refresh every 5 seconds. `lastError` lives one refresh cycle; data from the last successful tick stays visible.
 
@@ -44,7 +44,7 @@ Domain rules:
 
 - Peer `isActive` = handshake freshness is `fresh` or `aging` (green ≤ 2 min, orange ≤ 10 min, inclusive).
 - Interface `isConnected` = any of its peers is active.
-- Menu-bar title flips between `menu.title.on` / `menu.title.off`.
+- Menu-bar icon flips between `StatusIconOn`/`StatusIconOff` (vector PDFs in `Resources/`, loaded via `Bundle.module`, `isTemplate` so AppKit recolors for light/dark; error state shows Off). Model exposes `isAnyConnected`; `menu.title.on/off` remains as the VoiceOver accessibility label.
 
 ## Localization
 

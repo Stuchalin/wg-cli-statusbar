@@ -16,6 +16,23 @@ final class CardMenuItem: NSMenuItem {
     override var isHighlighted: Bool { false }
 }
 
+/// Иконки меню-бара (векторные PDF из бандла, 18×18 из MediaBox).
+/// Template-рендер: AppKit красит альфа-маску под тему (чёрный/белый),
+/// двухтон щита On-иконки переживает через альфу (100%/72%).
+/// Static — тестируется без создания `NSStatusItem`.
+enum StatusIcon {
+    static let on: NSImage? = load("StatusIconOn")
+    static let off: NSImage? = load("StatusIconOff")
+
+    static func image(connected: Bool) -> NSImage? { connected ? on : off }
+
+    private static func load(_ name: String) -> NSImage? {
+        let image = Bundle.module.image(forResource: name)
+        image?.isTemplate = true
+        return image
+    }
+}
+
 /// Структура меню статуса как данные — изолирована от `NSStatusItem`, тестируется напрямую.
 enum StatusMenuStructure {
     enum Entry: Equatable {
@@ -75,13 +92,14 @@ enum StatusMenuFactory {
     }
 }
 
-/// Владелец `NSStatusItem` (тайтл `wg: on/off`) и `NSMenu` с AppKit-гибридом:
+/// Владелец `NSStatusItem` (иконка on/off, текст статуса — в accessibilityLabel
+/// для VoiceOver) и `NSMenu` с AppKit-гибридом:
 /// первый пункт — SwiftUI-карточка `StatusCardView` в `NSHostingView`,
 /// ниже — нативные пункты со стандартной клавиатурной навигацией.
 ///
 /// Меню пересобирается в `menuNeedsUpdate` — при каждом открытии данные свежие.
 /// Контент карточки обновляется сам (`@ObservedObject` модели), контроллер
-/// реагирует на `objectWillChange` тайтлом, состоянием пункта «Обновить»
+/// реагирует на `objectWillChange` иконкой, состоянием пункта «Обновить»
 /// и перемером высоты карточки.
 ///
 /// Создавать на главном потоке (единственный владелец — AppDelegate приложения).
@@ -101,7 +119,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
-        statusItem.button?.title = model.menuTitle
+        updateStatusIcon()
 
         let menu = NSMenu()
         // isEnabled задаём сами: «Управление тоннелями» — всегда disabled
@@ -124,9 +142,16 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func modelDidChange() {
-        statusItem.button?.title = model.menuTitle
+        updateStatusIcon()
         updateRefreshItemEnabledState()
         resizeCardToContent()
+    }
+
+    /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg = Off,
+    /// детали — в карточке). Template-режим сам выбирает цвет под тему.
+    private func updateStatusIcon() {
+        statusItem.button?.image = StatusIcon.image(connected: model.isAnyConnected)
+        statusItem.button?.setAccessibilityLabel(model.menuTitle)
     }
 
     /// Загруженность меняется и при открытом меню (тик обновления работает
