@@ -100,7 +100,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
-        statusItem.button?.title = Self.statusTitle(interfaces: model.interfaces)
+        statusItem.button?.title = model.menuTitle
 
         let menu = NSMenu()
         // isEnabled задаём сами: «Управление тоннелями» — всегда disabled
@@ -122,16 +122,8 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
-    /// Тайтл статус-айтема от состояния модели: `wg: on`, когда хоть один интерфейс подключён.
-    /// Дублирует правило `WireGuardStatusModel.menuTitle` — изолирована от AppKit для тестов.
-    static func statusTitle(interfaces: [WGInterface]) -> String {
-        interfaces.contains(where: \.isConnected)
-            ? L10n.string("menu.title.on")
-            : L10n.string("menu.title.off")
-    }
-
     private func modelDidChange() {
-        statusItem.button?.title = Self.statusTitle(interfaces: model.interfaces)
+        statusItem.button?.title = model.menuTitle
         resizeCardToContent()
     }
 
@@ -197,8 +189,14 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Действия пунктов
 
-    @objc private func statusMenuAction(_ sender: NSMenuItem) {
-        guard let action = StatusMenuAction(rawValue: sender.tag) else { return }
+    /// Диспетчеризация действий меню — статически, чтобы тестировать без
+    /// создания `NSStatusItem` (quit инжектится: реальный обработчик зовёт
+    /// `NSApplication.terminate`).
+    static func performStatusAction(
+        _ action: StatusMenuAction,
+        model: WireGuardStatusModel,
+        quit: () -> Void
+    ) {
         switch action {
         case .refresh:
             // Кнопка «Обновить» — принудительный рескан имён туннелей
@@ -208,6 +206,13 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         case .manageTunnels:
             break  // placeholder — управление туннелями появится позже
         case .quit:
+            quit()
+        }
+    }
+
+    @objc private func statusMenuAction(_ sender: NSMenuItem) {
+        guard let action = StatusMenuAction(rawValue: sender.tag) else { return }
+        Self.performStatusAction(action, model: model) {
             NSApplication.shared.terminate(nil)
         }
     }

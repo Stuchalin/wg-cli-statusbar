@@ -66,6 +66,12 @@ final class FormattersTests: XCTestCase {
         XCTAssertEqual(Formatters.formatAgo(week, now: now), L10n.string("ago.days", "7"))
     }
 
+    func testFormatAgoFutureDateClampsToZeroSeconds() {
+        // Сдвиг часов: дата из будущего не даёт отрицательного возраста
+        let future = now.addingTimeInterval(57)
+        XCTAssertEqual(Formatters.formatAgo(future, now: now), L10n.string("ago.seconds", "0"))
+    }
+
     // MARK: - Локализация ключей ago.*
 
     func testAgoKeysExistWithPlaceholderInBothLocalizations() throws {

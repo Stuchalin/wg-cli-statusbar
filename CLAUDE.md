@@ -25,7 +25,7 @@ Two targets (see `Package.swift`); note directory names don't match target names
 
 - `WGStatusBar` — executable target located at `Sources/App/main.swift`: no `@main`; `NSApplication` + `AppDelegate` + `setActivationPolicy(.accessory)` + `app.run()`. The delegate owns the model and the `StatusItemController`. Thin shell, no business logic.
 - `WGStatusBarCore` — library target split across `Sources/WGStatusBarCore/`:
-    - `WireGuardStatusBarCore.swift` — `WireGuardStatusModel` (ObservableObject), the `wg show all dump` process runner (`ProcessWGShowRunner`, injectable via `WGShowCommandRunning`), and `L10n`.
+    - `WireGuardStatusBarCore.swift` — `WireGuardStatusModel` (ObservableObject), the `wg show all dump` process runner (`ProcessWGShowRunner`, injectable via `WGShowCommandRunning`; command and timeout injectable for runner tests), and `L10n`.
     - `Model.swift` — `WGInterface { name, displayName, peers }`, `WGPeer { publicKey, endpoint, allowedIps, latestHandshake: Date?, rxBytes, txBytes: UInt64 }`.
     - `DumpParser.swift` — global `parseWGShowDump(String) -> [WGInterface]` (tab-separated; interface line = 5 fields, peer line = 9; epoch `0` = never; `(none)` → nil).
     - `HandshakeFreshness.swift` — freshness enum with thresholds (fresh ≤ 120 s, aging ≤ 600 s) and `RouteScope` (fullTunnel/splitTunnel/none from allowed ips).
@@ -53,5 +53,5 @@ All UI strings go through `L10n.string(key, args...)` (loads from `.module` bund
 ## Testing notes
 
 - Tests use `@testable import WGStatusBarCore`. Two injection points on the model: `WireGuardStatusModel(testing:)` injects interfaces directly (no timer/network), `init(commandRunner:tunnelNamer:)` injects protocol mocks for refresh-flow tests.
-- Parser tests call the global `parseWGShowDump(_:)` with fixture strings — no process spawning in unit tests.
-- Namer tests inject a fake file system; card and menu logic are tested through `StatusCardViewModel` and `StatusMenuStructure` (no `NSHostingView` in tests).
+- Parser tests call the global `parseWGShowDump(_:)` with fixture strings — no process spawning there. The only tests spawning processes are `ProcessWGShowRunnerTests`: short-lived `/bin/zsh` commands with an injected small timeout.
+- Namer tests inject a fake file system; card and menu logic are tested through `StatusCardViewModel`, `StatusMenuStructure` and `StatusItemController.performStatusAction` (no `NSStatusItem`/`NSHostingView` in tests).

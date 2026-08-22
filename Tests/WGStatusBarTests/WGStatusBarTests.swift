@@ -179,42 +179,16 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(makeInterface("wg2", peers: []).isConnected)
     }
 
-    // MARK: - Модель: statusText / menuTitle
-
-    func testStatusTextWhenNoInterfaces() {
-        let model = WireGuardStatusModel(testing: [])
-
-        XCTAssertEqual(model.statusText, L10n.string("status.no_interfaces"))
-    }
-
-    func testStatusTextWhenAllConnected() {
-        let model = WireGuardStatusModel(
-            testing: [
-                makeInterface("wg0", peers: [makeActivePeer("peer-a")]),
-                makeInterface("wg1", peers: [makeActivePeer("peer-b")]),
-            ]
-        )
-
-        XCTAssertEqual(model.statusText, L10n.string("status.all_connected"))
-    }
-
-    func testStatusTextWhenSomeConnected() {
-        let model = WireGuardStatusModel(
-            testing: [
-                makeInterface("wg0", peers: [makeActivePeer("peer-a")]),
-                makeInterface("wg1", peers: [makeNeverPeer("peer-b")]),
-            ]
-        )
-
-        XCTAssertEqual(model.statusText, L10n.string("status.connected_count", "1", "2"))
-    }
+    // MARK: - Модель: menuTitle
 
     func testMenuTitleWhenActiveAndInactive() {
         let connectedModel = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeActivePeer("peer-a")])])
         let disconnectedModel = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeNeverPeer("peer-b")])])
+        let emptyModel = WireGuardStatusModel(testing: [])
 
         XCTAssertEqual(connectedModel.menuTitle, L10n.string("menu.title.on"))
         XCTAssertEqual(disconnectedModel.menuTitle, L10n.string("menu.title.off"))
+        XCTAssertEqual(emptyModel.menuTitle, L10n.string("menu.title.off"))
     }
 
     /// Aging-хендшейк (−5 мин) — всё ещё «подключён»: green|orange дают active.
@@ -223,7 +197,6 @@ final class WGStatusBarTests: XCTestCase {
             testing: [makeInterface("wg0", peers: [WGPeer(publicKey: "peer-a", latestHandshake: makeAgingHandshake())])]
         )
 
-        XCTAssertEqual(allAging.statusText, L10n.string("status.all_connected"))
         XCTAssertEqual(allAging.menuTitle, L10n.string("menu.title.on"))
 
         let partlyAging = WireGuardStatusModel(
@@ -233,7 +206,6 @@ final class WGStatusBarTests: XCTestCase {
             ]
         )
 
-        XCTAssertEqual(partlyAging.statusText, L10n.string("status.connected_count", "1", "2"))
         XCTAssertEqual(partlyAging.menuTitle, L10n.string("menu.title.on"))
     }
 
@@ -372,13 +344,18 @@ final class WGStatusBarTests: XCTestCase {
                     makePeerDumpLine(interfaceName: "utun3", handshakeSecondsAgo: 60),
                 ])),
                 .failure(NSError(domain: "WGStatusBarTests", code: 1)),
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun7"),
+                    makePeerDumpLine(interfaceName: "utun7", handshakeSecondsAgo: 60),
+                ])),
             ]),
-            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "work-vpn"])
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "work-vpn", "utun7": "home-vpn"])
         )
 
         model.refresh()
         waitUntil({ !model.isLoading }, "первый refresh должен завершиться")
         XCTAssertEqual(model.interfaces.count, 1)
+        XCTAssertEqual(model.interfaces[0].name, "utun3")
 
         model.refresh()
         waitUntil({ !model.isLoading && model.lastError != nil }, "ошибочный refresh должен завершиться с lastError")
@@ -386,16 +363,24 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertNotNil(model.lastError, "ошибка команды должна попасть в lastError")
         XCTAssertEqual(model.interfaces.count, 1, "данные последнего успешного тика должны остаться")
         XCTAssertEqual(model.interfaces[0].displayName, "work-vpn")
+
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastError == nil }, "успешный refresh после ошибки должен завершиться")
+
+        XCTAssertNil(model.lastError, "lastError живёт один цикл refresh")
+        XCTAssertEqual(model.interfaces[0].name, "utun7", "успешный тик должен обновить данные")
     }
 
     // MARK: - Гигиена ключей после удаления StatusMenuView
 
-    /// Ключи, которые использовал только удалённый `StatusMenuView`, не должны
-    /// оставаться в таблицах — иначе таблицы копят мёртвые строки.
+    /// Ключи, которые использовал только удалённый `StatusMenuView` (и ключи
+    /// удалённой на ревью сводной строки `statusText`), не должны оставаться
+    /// в таблицах — иначе таблицы копят мёртвые строки.
     func testRemovedStatusMenuViewKeysAreGoneFromBothLocalizations() throws {
         let removedKeys = [
             "app.title", "state.connected", "state.disconnected",
             "peers.not_found", "peer.handshake", "peer.handshake_unknown",
+            "status.no_active_connections", "status.all_connected", "status.connected_count",
         ]
 
         for language in ["en", "ru"] {

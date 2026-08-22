@@ -128,6 +128,7 @@
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 
 - [x] тест: `statusText`/`menuTitle` на новой модели (0 интерфейсов / все подключены / часть); фикстуры с запасом от порогов (−60 с / −5 мин / −15 мин), чтобы не флапать на границах 2/10 мин
+- ⚠️ отклонение (ревью 2026-08-22): `statusText` и ключи `status.no_active_connections`/`status.all_connected`/`status.connected_count` удалены — после удаления `StatusMenuView` у сводной строки не осталось UI-потребителя, карточке нужна только `status.no_interfaces` (живёт в `StatusCardViewModel.emptyStateText`)
 - [x] тест: после refresh `displayName` интерфейса — из namer; при неизвестном utun namer делает ровно один рескан (мок-namer, счётчик вызовов)
 - [x] команда меняется на `wg show all dump` в `runWGShowSync`; таймаут/логин-шелл механика без изменений
 
@@ -149,6 +150,7 @@
 - [x] реализация view-model (чистый тип, тестируемый) + тонкий `StatusCardView` поверх неё
 - [x] верстка: заголовок (displayName headline + utun secondary), endpoint, allowed-ips строка, `↓/↑` трафик `.monospacedDigit()`, хендшейк цветом свежести, спиннер isLoading, красная caption lastError
 - [x] ⓘ-легенда: in-place toggle, локализованные 3 строки легенды; пересборка меню через колбэк
+  - ⚠️ отклонение (ревью 2026-08-22): реализовано перемером высоты пункта (`resizeCardToContent` по `onContentChange`) — пересборки меню нет, высота пункта-карточки обновляется на живом меню
 - [x] новые ключи в en+ru (`legend.*`, `badge.full_tunnel`, `peer.*` и пр.)
 - [x] `swift test` — зелёные
 

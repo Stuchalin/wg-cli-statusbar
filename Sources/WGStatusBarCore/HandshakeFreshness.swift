@@ -42,18 +42,27 @@ public enum RouteScope: Equatable {
     /// Маршрутов нет: строка пустая или placeholder `(none)`.
     case none
 
-    public init(allowedIps: String?) {
-        let entries = (allowedIps ?? "")
+    /// Маршруты по умолчанию из allowed ips — единственное место определения.
+    static let defaultRoutes: Set<String> = ["0.0.0.0/0", "::/0"]
+
+    /// Непустые записи allowed ips: по запятой, без пробелов; `(none)` остаётся записью.
+    static func entries(allowedIps: String?) -> [String] {
+        (allowedIps ?? "")
             .split(separator: ",")
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
             .filter { !$0.isEmpty }
+    }
 
+    public init(allowedIps: String?) {
+        self.init(entries: Self.entries(allowedIps: allowedIps))
+    }
+
+    init(entries: [String]) {
         guard !entries.isEmpty, entries != ["(none)"] else {
             self = .none
             return
         }
 
-        let defaultRoutes: Set<String> = ["0.0.0.0/0", "::/0"]
-        self = entries.contains { defaultRoutes.contains($0) } ? .fullTunnel : .splitTunnel
+        self = entries.contains { Self.defaultRoutes.contains($0) } ? .fullTunnel : .splitTunnel
     }
 }

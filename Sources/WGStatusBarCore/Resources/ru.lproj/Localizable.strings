@@ -1,7 +1,4 @@
 "status.no_interfaces" = "Нет интерфейсов";
-"status.no_active_connections" = "Нет активных подключений";
-"status.all_connected" = "Все подключены";
-"status.connected_count" = "Подключено %@ из %@";
 "button.refresh" = "Обновить";
 "button.open_configs" = "Открыть конфиги WireGuard";
 "button.tunnel_management_soon" = "Управление тоннелями (скоро)";
@@ -9,8 +6,8 @@
 "menu.title.on" = "wg: on";
 "menu.title.off" = "wg: off";
 "error.config_folder_not_found" = "Не найден каталог с конфигами WireGuard";
-"error.wg_show_failed" = "Команда `wg show` завершилась с кодом %@";
-"error.wg_show_timeout" = "Время ожидания команды `wg show` истекло";
+"error.wg_show_failed" = "Команда `wg show all dump` завершилась с кодом %@";
+"error.wg_show_timeout" = "Время ожидания команды `wg show all dump` истекло";
 "ago.seconds" = "%@ с назад";
 "ago.minutes" = "%@ мин назад";
 "ago.hours" = "%@ ч назад";

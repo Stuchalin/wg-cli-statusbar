@@ -35,6 +35,13 @@ final class HandshakeFreshnessTests: XCTestCase {
         XCTAssertEqual(HandshakeFreshness.freshness(date: nil, now: now), .never)
     }
 
+    func testFreshnessFutureHandshakeIsFresh() {
+        // Эпоха хендшейка приходит от ядра: при отстающих локальных часах возраст
+        // отрицательный — считаем пир свежим, сдвиг часов не роняет статус.
+        let handshake = now.addingTimeInterval(30)
+        XCTAssertEqual(HandshakeFreshness.freshness(date: handshake, now: now), .fresh)
+    }
+
     // MARK: - Семантика isActive (подключён)
 
     func testFreshAndAgingCountAsActive() {
@@ -85,5 +92,10 @@ final class HandshakeFreshnessTests: XCTestCase {
 
     func testNonePlaceholderIsNoRoutes() {
         XCTAssertEqual(RouteScope(allowedIps: "(none)"), RouteScope.none)
+    }
+
+    func testNonePlaceholderAmongSubnetsIsStillSplitTunnel() {
+        // `(none)` вперемешку с подсетями: маршруты есть — сплит-туннель
+        XCTAssertEqual(RouteScope(allowedIps: "10.0.0.0/24, (none)"), .splitTunnel)
     }
 }

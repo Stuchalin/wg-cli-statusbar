@@ -19,15 +19,35 @@ public protocol WGShowCommandRunning {
 }
 
 /// Продакшн-раннер: `/bin/zsh -lc "wg show all dump"` (login-shell, чтобы Homebrew's
-/// `wg` был на PATH) с таймаутом. Сырой вывод содержит секреты — не логировать.
+/// `wg` был на PATH) с таймаутом. Процесс и таймаут инжектятся для тестов раннера.
+/// Сырой вывод содержит секреты — не логировать.
 public struct ProcessWGShowRunner: WGShowCommandRunning {
-    public init() {}
+    private let executableURL: URL
+    private let arguments: [String]
+    private let timeout: TimeInterval
+
+    public init(
+        executableURL: URL = URL(fileURLWithPath: "/bin/zsh"),
+        arguments: [String] = ["-lc", "wg show all dump"],
+        timeout: TimeInterval = 5.0
+    ) {
+        self.executableURL = executableURL
+        self.arguments = arguments
+        self.timeout = timeout
+    }
 
     public func runDump() async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
+        let executableURL = self.executableURL
+        let arguments = self.arguments
+        let timeout = self.timeout
+        return try await withCheckedThrowingContinuation { continuation in
             Task.detached {
                 do {
-                    let output = try Self.runWGShowSync(timeout: 5.0)
+                    let output = try Self.runWGShowSync(
+                        executableURL: executableURL,
+                        arguments: arguments,
+                        timeout: timeout
+                    )
                     continuation.resume(returning: output)
                 } catch {
                     continuation.resume(throwing: error)
@@ -36,40 +56,68 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
         }
     }
 
-    private static func runWGShowSync(timeout: TimeInterval) throws -> String {
+    private static func runWGShowSync(
+        executableURL: URL,
+        arguments: [String],
+        timeout: TimeInterval
+    ) throws -> String {
         let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
-        process.arguments = ["-lc", "wg show all dump"]
+        process.executableURL = executableURL
+        process.arguments = arguments
 
         let outPipe = Pipe()
         let errPipe = Pipe()
         process.standardOutput = outPipe
         process.standardError = errPipe
+
+        // Каналы дренируются параллельно ожиданию: дамп больше буфера пайпа
+        // (~64 KiB, ~200+ пиров) блокирует запись процесса — waitUntilExit без
+        // чтения висел бы до таймаута вместо данных.
+        var outputData = Data()
+        var errorData = Data()
+        let drainQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.drain", attributes: .concurrent)
+        let drained = DispatchGroup()
+        drained.enter()
+        drainQueue.async {
+            outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
+            drained.leave()
+        }
+        drained.enter()
+        drainQueue.async {
+            errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            drained.leave()
+        }
+
         let stateQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.state")
         var timedOut = false
+        var exited = false
 
         try process.run()
         let timeoutTask = DispatchWorkItem {
-            stateQueue.sync {
+            let shouldTerminate = stateQueue.sync { () -> Bool in
+                guard !exited, process.isRunning else { return false }
                 timedOut = true
+                return true
             }
-            if process.isRunning {
-                process.terminate()
+            if shouldTerminate {
+                // kill вместо terminate(): между проверкой isRunning и сигналом
+                // процесс может успеть завершиться — kill несуществующему pid
+                // просто вернёт ошибку, гонка безвредна.
+                kill(process.processIdentifier, SIGTERM)
             }
         }
         process.terminationHandler = { _ in
+            stateQueue.sync { exited = true }
             timeoutTask.cancel()
         }
 
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutTask)
         process.waitUntilExit()
+        drained.wait()
 
         if stateQueue.sync(execute: { timedOut }) {
             throw WGShowError.commandTimeout
         }
-
-        let outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
-        let errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
 
         let output = String(data: outputData, encoding: .utf8) ?? ""
         let errorText = String(data: errorData, encoding: .utf8) ?? ""
@@ -110,6 +158,8 @@ public final class WireGuardStatusModel: ObservableObject {
     private let tunnelNamer: WireGuardTunnelNaming
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 5
+    /// Номер текущего refresh; завершения старых поколений отбрасываются.
+    private var refreshGeneration = 0
 
     public init() {
         self.commandRunner = ProcessWGShowRunner()
@@ -133,24 +183,20 @@ public final class WireGuardStatusModel: ObservableObject {
         timer?.invalidate()
     }
 
-    public var statusText: String {
-        if interfaces.isEmpty { return L10n.string("status.no_interfaces") }
-        let activeCount = interfaces.filter(\.isConnected).count
-        if activeCount == 0 { return L10n.string("status.no_active_connections") }
-        if activeCount == interfaces.count { return L10n.string("status.all_connected") }
-        return L10n.string("status.connected_count", String(activeCount), String(interfaces.count))
-    }
-
     public var menuTitle: String {
-        let iconPrefix = interfaces.contains(where: \.isConnected)
+        interfaces.contains(where: \.isConnected)
             ? L10n.string("menu.title.on")
             : L10n.string("menu.title.off")
-        return iconPrefix
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);
     /// обычный тик ресканит лениво и только встретив незнакомый utun.
     public func refresh(forceNameRescan: Bool = false) {
+        // Тик таймера или ⌘R могут стартовать refresh поверх ещё не завершившегося
+        // (команда с 5-секундным таймаутом): применяем только результат последнего,
+        // чтобы старый снапшот/ошибка не перезаписали свежие данные.
+        refreshGeneration += 1
+        let generation = refreshGeneration
         isLoading = true
         lastError = nil
 
@@ -165,13 +211,13 @@ public final class WireGuardStatusModel: ObservableObject {
                     forcingRescan: forceNameRescan
                 )
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, generation == self.refreshGeneration else { return }
                     self.interfaces = parsed
                     self.isLoading = false
                 }
             } catch {
                 await MainActor.run { [weak self] in
-                    guard let self else { return }
+                    guard let self, generation == self.refreshGeneration else { return }
                     self.lastError = error.localizedDescription
                     self.isLoading = false
                 }
@@ -232,11 +278,16 @@ public final class WireGuardStatusModel: ObservableObject {
     }
 
     private func startTimer() {
-        timer = Timer.scheduledTimer(withTimeInterval: refreshInterval, repeats: true) { [weak self] _ in
+        // .common, а не дефолтный режим run loop: пока открыто меню NSStatusItem,
+        // главный run loop работает в NSEventTrackingRunLoopMode и таймер из
+        // scheduledTimer стоит — карточка замирала бы на всё время открытого меню.
+        let timer = Timer(timeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
                 self?.refresh()
             }
         }
+        RunLoop.main.add(timer, forMode: .common)
+        self.timer = timer
     }
 }
 

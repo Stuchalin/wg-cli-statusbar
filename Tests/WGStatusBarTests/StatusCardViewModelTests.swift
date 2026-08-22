@@ -113,6 +113,11 @@ final class StatusCardViewModelTests: XCTestCase {
         XCTAssertEqual(StatusCardViewModel.shortPublicKey(key), "Q1P4Lb5d…3gU=")
     }
 
+    func testShortPublicKeyBoundaryAroundTwelveCharacters() {
+        XCTAssertEqual(StatusCardViewModel.shortPublicKey("aaaaaaaaaaaa"), "aaaaaaaaaaaa", "12 символов — граница, не укорачивается")
+        XCTAssertEqual(StatusCardViewModel.shortPublicKey("aaaaaaaaaaaaa"), "aaaaaaaa…aaaa", "13 символов — укорачивается")
+    }
+
     // MARK: - Маршрутизация: «весь трафик» / список подсетей
 
     func testRouteFullTunnelSinglePeer() {
@@ -171,6 +176,17 @@ final class StatusCardViewModelTests: XCTestCase {
             XCTAssertEqual(viewModel.interfaces[0].routeScope, .none)
             XCTAssertNil(viewModel.interfaces[0].routeText, "allowedIps=\(allowedIps ?? "nil") → строки маршрута нет")
         }
+    }
+
+    func testRouteTextExcludesNonePlaceholderAmongSubnets() {
+        let viewModel = makeViewModel([
+            WGInterface(name: "utun3", peers: [
+                makePeer("a", handshakeSecondsAgo: 60, allowedIps: "10.0.0.0/24, (none)"),
+            ]),
+        ])
+
+        XCTAssertEqual(viewModel.interfaces[0].routeScope, .splitTunnel)
+        XCTAssertEqual(viewModel.interfaces[0].routeText, "10.0.0.0/24", "placeholder (none) не попадает в список подсетей")
     }
 
     // MARK: - Empty state, ошибки, загрузка

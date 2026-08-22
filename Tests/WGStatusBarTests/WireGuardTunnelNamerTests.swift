@@ -162,4 +162,38 @@ final class WireGuardTunnelNamerTests: XCTestCase {
         namer.rescan()
         XCTAssertEqual(namer.displayName(for: "utun5"), "work-vpn")
     }
+
+    // MARK: - Rescan замещает кэш целиком
+
+    func testRescanForgetsRemovedTunnel() {
+        // Туннель снесли (del_if удалил файлы) — после rescan кэш не должен
+        // подсвечивать устаревшее имя.
+        writeFile("work-vpn.name", contents: "utun2")
+        writeFile("utun2.sock", contents: "")
+        let namer = makeNamer()
+        XCTAssertEqual(namer.displayName(for: "utun2"), "work-vpn")
+
+        try? FileManager.default.removeItem(at: tempDir.appendingPathComponent("work-vpn.name"))
+        try? FileManager.default.removeItem(at: tempDir.appendingPathComponent("utun2.sock"))
+        namer.rescan()
+
+        XCTAssertEqual(namer.displayName(for: "utun2"), "utun2", "после удаления .name/.sock rescan должен забыть имя")
+    }
+
+    // MARK: - Мусорные записи в каталоге
+
+    func testScanIgnoresMalformedEntries() {
+        // Пустой .name, .name из одних пробелов, запись с именем ровно ".name"
+        // (пустое имя конфига) и посторонний файл — в кэш не попадают.
+        writeFile("empty.name", contents: "")
+        writeFile("blank.name", contents: " \n ")
+        writeFile(".name", contents: "utun8")
+        writeFile("utun8.sock", contents: "")
+        writeFile("work-vpn.conf", contents: "utun9")
+        writeFile("utun9.sock", contents: "")
+
+        let namer = makeNamer()
+        XCTAssertEqual(namer.displayName(for: "utun8"), "utun8", "запись с пустым именем конфига игнорируется")
+        XCTAssertEqual(namer.displayName(for: "utun9"), "utun9", "файл не .name не читается как запись")
+    }
 }

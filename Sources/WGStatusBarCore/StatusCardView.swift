@@ -57,13 +57,14 @@ public struct StatusCardViewModel: Equatable {
             )
             self.peers = interface.peers.map { Peer($0, now: now) }
 
-            let scopes = interface.peers.map { RouteScope(allowedIps: $0.allowedIps) }
+            let peerEntries = interface.peers.map { RouteScope.entries(allowedIps: $0.allowedIps) }
+            let scopes = peerEntries.map(RouteScope.init(entries:))
             if scopes.contains(.fullTunnel) {
                 self.routeScope = .fullTunnel
                 self.routeText = L10n.string("badge.full_tunnel")
             } else if scopes.contains(.splitTunnel) {
                 self.routeScope = .splitTunnel
-                self.routeText = Self.subnetList(of: interface.peers)
+                self.routeText = Self.subnetList(of: peerEntries)
             } else {
                 self.routeScope = .none
                 self.routeText = nil
@@ -76,15 +77,13 @@ public struct StatusCardViewModel: Equatable {
             return values.min { (rank[$0] ?? 3) < (rank[$1] ?? 3) } ?? .never
         }
 
-        /// Подсети всех пиров одной строкой, без дублей, в порядке первого появления.
-        private static func subnetList(of peers: [WGPeer]) -> String? {
+        /// Подсети всех пиров одной строкой, без дублей, default-маршрутов и
+        /// placeholder'а `(none)`, в порядке первого появления.
+        private static func subnetList(of peerEntries: [[String]]) -> String? {
             var seen: Set<String> = []
             var ordered: [String] = []
-            for peer in peers {
-                for entry in (peer.allowedIps ?? "").split(separator: ",") {
-                    let subnet = entry.trimmingCharacters(in: .whitespacesAndNewlines)
-                    let defaultRoutes: Set<String> = ["0.0.0.0/0", "::/0"]
-                    guard !subnet.isEmpty, subnet != "(none)", !defaultRoutes.contains(subnet) else { continue }
+            for entries in peerEntries {
+                for subnet in entries where subnet != "(none)" && !RouteScope.defaultRoutes.contains(subnet) {
                     if seen.insert(subnet).inserted {
                         ordered.append(subnet)
                     }
@@ -124,7 +123,8 @@ public struct StatusCardViewModel: Equatable {
 /// Карточка статуса для первого пункта NSMenu (Task 7 вставит её в `NSHostingView`).
 ///
 /// `onContentChange` вызывается, когда содержимое меняет высоту (ⓘ-легенда) —
-/// владелец меню пересобирает его по этому колбэку.
+/// владелец по колбэку перемеряет и обновляет frame пункта-карточки
+/// (`resizeCardToContent`), само меню не пересобирается.
 public struct StatusCardView: View {
     @ObservedObject private var model: WireGuardStatusModel
     private let onContentChange: () -> Void

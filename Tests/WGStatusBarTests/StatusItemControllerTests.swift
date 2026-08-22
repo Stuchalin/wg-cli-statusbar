@@ -3,14 +3,7 @@ import XCTest
 @testable import WGStatusBarCore
 
 final class StatusItemControllerTests: XCTestCase {
-    // MARK: - Фикстуры (относительно now, с запасом от порогов 2/10 мин)
-
-    private func peer(_ key: String, handshakeSecondsAgo: Int?) -> WGPeer {
-        WGPeer(
-            publicKey: key,
-            latestHandshake: handshakeSecondsAgo.map { Date(timeIntervalSinceNow: TimeInterval(-$0)) }
-        )
-    }
+    // MARK: - Фикстуры
 
     private func actionEntry(
         _ id: StatusMenuAction,
@@ -45,29 +38,52 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(isEnabled, enabled, line: line)
     }
 
-    // MARK: - Тайтл статус-айтема wg: on/off
+    // MARK: - Действия меню: диспетчеризация (статически, без NSStatusItem)
 
-    func testStatusTitleOnWhenAnyInterfaceConnected() {
-        let oneActive = [WGInterface(name: "utun3", peers: [peer("a", handshakeSecondsAgo: 60)])]
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: oneActive), L10n.string("menu.title.on"))
-
-        let partlyActive = [
-            WGInterface(name: "utun3", peers: [peer("a", handshakeSecondsAgo: 60)]),
-            WGInterface(name: "utun7", peers: [peer("b", handshakeSecondsAgo: nil)]),
-        ]
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: partlyActive), L10n.string("menu.title.on"))
+    private final class SuccessRunner: WGShowCommandRunning {
+        func runDump() async throws -> String { "" }
     }
 
-    func testStatusTitleOnForAgingHandshake() {
-        let aging = [WGInterface(name: "utun3", peers: [peer("a", handshakeSecondsAgo: 5 * 60)])]
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: aging), L10n.string("menu.title.on"), "хендшейк −5 мин — ещё orange → подключён")
+    private final class CountingTunnelNamer: WireGuardTunnelNaming {
+        private let lock = NSLock()
+        private var rescanCountStorage = 0
+
+        var rescanCount: Int {
+            lock.lock()
+            defer { lock.unlock() }
+            return rescanCountStorage
+        }
+
+        func displayName(for interfaceName: String) -> String { interfaceName }
+
+        func rescan() {
+            lock.lock()
+            defer { lock.unlock() }
+            rescanCountStorage += 1
+        }
     }
 
-    func testStatusTitleOffWhenNobodyActive() {
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: []), L10n.string("menu.title.off"))
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: [WGInterface(name: "utun3", peers: [])]), L10n.string("menu.title.off"))
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: [WGInterface(name: "utun3", peers: [peer("a", handshakeSecondsAgo: nil)])]), L10n.string("menu.title.off"))
-        XCTAssertEqual(StatusItemController.statusTitle(interfaces: [WGInterface(name: "utun3", peers: [peer("a", handshakeSecondsAgo: 15 * 60)])]), L10n.string("menu.title.off"), "хендшейк −15 мин — stale → отключён")
+    func testPerformRefreshForcesNameRescan() {
+        let namer = CountingTunnelNamer()
+        let model = WireGuardStatusModel(commandRunner: SuccessRunner(), tunnelNamer: namer)
+
+        StatusItemController.performStatusAction(.refresh, model: model, quit: {})
+
+        // rescan происходит в detached-задаче refresh — крутим run loop до её завершения
+        let deadline = Date().addingTimeInterval(2)
+        while namer.rescanCount == 0 && Date() < deadline {
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+        XCTAssertEqual(namer.rescanCount, 1, "«Обновить» должен звать refresh с forceNameRescan: true")
+    }
+
+    func testPerformQuitCallsQuitHandler() {
+        var quitCalled = false
+        let model = WireGuardStatusModel(commandRunner: SuccessRunner(), tunnelNamer: CountingTunnelNamer())
+
+        StatusItemController.performStatusAction(.quit, model: model) { quitCalled = true }
+
+        XCTAssertTrue(quitCalled)
     }
 
     // MARK: - Структура меню: пункты, шорткаты, разделители, enabled

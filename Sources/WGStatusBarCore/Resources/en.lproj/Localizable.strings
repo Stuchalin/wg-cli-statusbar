@@ -1,7 +1,4 @@
 "status.no_interfaces" = "No interfaces";
-"status.no_active_connections" = "No active connections";
-"status.all_connected" = "All connected";
-"status.connected_count" = "Connected %@ of %@";
 "button.refresh" = "Refresh";
 "button.open_configs" = "Open WireGuard configs";
 "button.tunnel_management_soon" = "Tunnel management (coming soon)";
@@ -9,8 +6,8 @@
 "menu.title.on" = "wg: on";
 "menu.title.off" = "wg: off";
 "error.config_folder_not_found" = "WireGuard config folder was not found";
-"error.wg_show_failed" = "Command `wg show` finished with code %@";
-"error.wg_show_timeout" = "Command `wg show` timed out";
+"error.wg_show_failed" = "Command `wg show all dump` finished with code %@";
+"error.wg_show_timeout" = "Command `wg show all dump` timed out";
 "ago.seconds" = "%@ s ago";
 "ago.minutes" = "%@ min ago";
 "ago.hours" = "%@ h ago";

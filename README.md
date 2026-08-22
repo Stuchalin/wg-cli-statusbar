@@ -17,6 +17,7 @@ The project is split into two targets:
   - Human-readable tunnel name (`work-vpn`) with the raw interface name (`utun2`) below it.
   - Endpoint, traffic (`↓ N KiB  ↑ N KiB`), and "N ago" handshake age.
   - Routing: "all traffic" badge when allowed ips include `0.0.0.0/0` or `::/0`, otherwise the subnet list.
+  - Shortened peer public key (head…tail), shown only when an interface has more than one peer.
   - ⓘ toggle with a color legend.
 - Native menu items with keyboard navigation: Refresh ⌘R, Open Configs ⌘O, Tunnel management (disabled placeholder), Quit ⌘Q.
 - Auto-refresh every 5 seconds; Refresh also forces a re-scan of tunnel names.
@@ -63,12 +64,13 @@ swift build -c release
 swift test --enable-code-coverage
 ```
 
-Current test suite covers 79 tests:
+Current test suite covers 87 tests:
 - handshake freshness classification and route scope (full/split tunnel)
 - byte and "N ago" formatters
 - `wg show all dump` parser (including secret-leak checks)
 - tunnel name resolver (`/var/run/wireguard` scanning, cache, stale entries)
-- model integration (status text, menu title, display-name resolution)
+- `wg show` command runner against short-lived system processes (exit codes, timeout, large output)
+- model integration (menu title, display-name resolution, error recovery)
 - status card view-model and menu structure
 
 ## Update localizations
