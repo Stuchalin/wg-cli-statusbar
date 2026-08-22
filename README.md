@@ -1,22 +1,34 @@
 # WG StatusBar for macOS (WireGuard CLI)
 
-A minimal macOS menu-bar app that shows current WireGuard interface status from the WireGuard CLI (`wg show`).
+A minimal macOS menu-bar app that shows current WireGuard interface status from the WireGuard CLI (`wg show all dump`).
 
 ## Project structure
 
 The project is split into two targets:
 
-- `WGStatusBar` — app target (menubar entry point).
+- `WGStatusBar` — app target (AppKit entry point: `NSApplication` + `AppDelegate`, no window).
 - `WGStatusBarCore` — core logic and localizations (`.lproj`).
 
 ## What it does
 
-- Shows WireGuard interfaces and their peers.
-- Detects whether a peer has a recent handshake (`never` is treated as inactive).
-- Auto-refreshes every 5 seconds.
-- Manual refresh button.
+- Menu-bar title `wg: on/off`: "on" when at least one interface has a recent peer handshake.
+- Opening the menu shows a status card per interface:
+  - Colored freshness dot: green (handshake ≤ 2 min), orange (2–10 min), secondary (> 10 min / never).
+  - Human-readable tunnel name (`work-vpn`) with the raw interface name (`utun2`) below it.
+  - Endpoint, traffic (`↓ N KiB  ↑ N KiB`), and "N ago" handshake age.
+  - Routing: "all traffic" badge when allowed ips include `0.0.0.0/0` or `::/0`, otherwise the subnet list.
+  - ⓘ toggle with a color legend.
+- Native menu items with keyboard navigation: Refresh ⌘R, Open Configs ⌘O, Tunnel management (disabled placeholder), Quit ⌘Q.
+- Auto-refresh every 5 seconds; Refresh also forces a re-scan of tunnel names.
 - Quick access to common WireGuard config folders.
-- Dedicated menu action **“Tunnel management (coming soon)”** as an extension point for future `up/down/restart`.
+- Tunnel management (`wg-quick up/down`) is a future extension point (disabled menu item).
+
+## How it reads status
+
+- Data source is the machine-readable `wg show all dump` (tab-separated): exact epoch handshake times and byte counters. Interface lines have 5 fields, peer lines 9; empty values are `(none)`. Secret fields (private key, preshared key) are parsed past and never enter the model; raw output is never logged.
+- Peer is active while its handshake is fresh or aging (green/orange); interface is connected when any peer is active.
+- Tunnel names come from the wg-quick mechanism on macOS: `wg-quick up <config>` writes the actual interface name to `/var/run/wireguard/<config>.name`, validated by the adjacent `<utun>.sock`. Unknown interfaces fall back to the raw name (`utun2`).
+- Reading WireGuard state typically requires root — the app is currently run under `sudo`.
 
 ## Requirements
 
@@ -51,10 +63,13 @@ swift build -c release
 swift test --enable-code-coverage
 ```
 
-Current test suite covers 9 tests:
-- `wg show` parser
-- connection state calculation (active/inactive interfaces)
-- menu text and status text behavior
+Current test suite covers 79 tests:
+- handshake freshness classification and route scope (full/split tunnel)
+- byte and "N ago" formatters
+- `wg show all dump` parser (including secret-leak checks)
+- tunnel name resolver (`/var/run/wireguard` scanning, cache, stale entries)
+- model integration (status text, menu title, display-name resolution)
+- status card view-model and menu structure
 
 ## Update localizations
 

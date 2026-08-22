@@ -187,9 +187,9 @@
 
 ### Task 10: Документация
 
-- [ ] обновить README.md: новая карточка, `wg show all dump`, механизм имён wg-quick
-- [ ] обновить CLAUDE.md: архитектура (StatusItemController, dump-парсер, namer), изменившиеся команды/структура
-- [ ] перенести план в `docs/plans/completed/`
+- [x] обновить README.md: новая карточка, `wg show all dump`, механизм имён wg-quick
+- [x] обновить CLAUDE.md: архитектура (StatusItemController, dump-парсер, namer), изменившиеся команды/структура
+- [x] перенести план в `docs/plans/completed/`
 
 ## Post-Completion
 
