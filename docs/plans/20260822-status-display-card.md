@@ -73,12 +73,12 @@
 - Create: `Sources/WGStatusBarCore/HandshakeFreshness.swift`
 - Create: `Tests/WGStatusBarTests/HandshakeFreshnessTests.swift`
 
-- [ ] тест: свежесть от `Date` — границы 2 мин (включительно → green) и 10 мин (включительно → orange), > 10 мин → stale, nil → never
-- [ ] тест: `isConnected`-семантика — green|orange дают «подключён», stale/never — нет
-- [ ] реализация `enum HandshakeFreshness { case fresh, aging, stale, never }` с константами порогов (120 c / 600 c) и фабрикой `freshness(date:now:)`
-- [ ] тест: классификация allowed ips — `0.0.0.0/0` или `::/0` → fullTunnel; только подсети → splitTunnel; пусто/`(none)` → нет маршрутов
-- [ ] реализация `RouteScope` (fullTunnel/splitTunnel) парсингом строки allowed ips
-- [ ] `swift test` — зелёные
+- [x] тест: свежесть от `Date` — границы 2 мин (включительно → green) и 10 мин (включительно → orange), > 10 мин → stale, nil → never
+- [x] тест: `isConnected`-семантика — green|orange дают «подключён», stale/never — нет
+- [x] реализация `enum HandshakeFreshness { case fresh, aging, stale, never }` с константами порогов (120 c / 600 c) и фабрикой `freshness(date:now:)`
+- [x] тест: классификация allowed ips — `0.0.0.0/0` или `::/0` → fullTunnel; только подсети → splitTunnel; пусто/`(none)` → нет маршрутов
+- [x] реализация `RouteScope` (fullTunnel/splitTunnel) парсингом строки allowed ips
+- [x] `swift test` — зелёные
 
 ### Task 2: Форматтеры байт и «N назад»
 
