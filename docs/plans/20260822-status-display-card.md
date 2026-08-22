@@ -158,12 +158,12 @@
 - Create: `Sources/WGStatusBarCore/StatusItemController.swift`
 - Create: `Tests/WGStatusBarTests/StatusItemControllerTests.swift`
 
-- [ ] тест: вычисление тайтла `wg: on/off` от состояния модели
-- [ ] тест: структура меню (пункты/шорткаты/разделители/enabled) на изолированном билдере
-- [ ] реализация: `NSStatusItem`, `NSMenu` c `menuNeedsUpdate`-пересборкой; первый пункт `NSMenuItem` + `NSHostingView(rootView: StatusCardView)`, подсветка пункта отключена
-- [ ] пункты target/action: Обновить ⌘R (принудительный рескан имён), Открыть конфиги ⌘O (существующий список каталогов), Управление тоннелями (disabled), Выход ⌘Q
-- [ ] подписка на `objectWillChange`: обновление тайтла и контента карточки
-- [ ] `swift test` — зелёные
+- [x] тест: вычисление тайтла `wg: on/off` от состояния модели
+- [x] тест: структура меню (пункты/шорткаты/разделители/enabled) на изолированном билдере
+- [x] реализация: `NSStatusItem`, `NSMenu` c `menuNeedsUpdate`-пересборкой; первый пункт `NSMenuItem` + `NSHostingView(rootView: StatusCardView)`, подсветка пункта отключена
+- [x] пункты target/action: Обновить ⌘R (принудительный рескан имён), Открыть конфиги ⌘O (существующий список каталогов), Управление тоннелями (disabled), Выход ⌘Q
+- [x] подписка на `objectWillChange`: обновление тайтла и контента карточки
+- [x] `swift test` — зелёные
 
 ### Task 8: Точка входа AppKit и удаление StatusMenuView
 
