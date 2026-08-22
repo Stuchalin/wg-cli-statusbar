@@ -77,6 +77,18 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
         var errorData = Data()
         let drainQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.drain", attributes: .concurrent)
         let drained = DispatchGroup()
+
+        let stateQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.state")
+        var timedOut = false
+        var exited = false
+
+        try process.run()
+
+        // Дренирование стартует только после успешного запуска: при броске run()
+        // write-концы пайпов остаются открытыми у нас, и readDataToEndOfFile
+        // не получил бы EOF — читатели висели бы вечно (утечка потоков и FD).
+        // Ребёнку за микросекунды между run() и стартом чтения не заполнить
+        // буфер пайпа — он ещё должен успеть exec.
         drained.enter()
         drainQueue.async {
             outputData = outPipe.fileHandleForReading.readDataToEndOfFile()
@@ -88,11 +100,6 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
             drained.leave()
         }
 
-        let stateQueue = DispatchQueue(label: "com.wgstatusbar.runwgshow.state")
-        var timedOut = false
-        var exited = false
-
-        try process.run()
         let timeoutTask = DispatchWorkItem {
             let shouldTerminate = stateQueue.sync { () -> Bool in
                 guard !exited, process.isRunning else { return false }
@@ -115,7 +122,12 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
         process.waitUntilExit()
         drained.wait()
 
-        if stateQueue.sync(execute: { timedOut }) {
+        // Латч timedOut ставится в гонке на границе дедлайна (`isRunning`
+        // отстаёт от фактического выхода процесса): процесс, завершившийся
+        // успешно уже после срабатывания дедлайна, отдаёт данные, а не таймаут.
+        // Убитый сигналом или завершившийся с ошибкой при сработавшем
+        // дедлайне — таймаут.
+        if stateQueue.sync(execute: { timedOut }), process.terminationStatus != 0 {
             throw WGShowError.commandTimeout
         }
 

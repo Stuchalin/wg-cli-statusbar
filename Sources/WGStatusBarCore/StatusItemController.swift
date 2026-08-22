@@ -81,7 +81,8 @@ enum StatusMenuFactory {
 ///
 /// Меню пересобирается в `menuNeedsUpdate` — при каждом открытии данные свежие.
 /// Контент карточки обновляется сам (`@ObservedObject` модели), контроллер
-/// реагирует на `objectWillChange` тайтлом и перемером высоты карточки.
+/// реагирует на `objectWillChange` тайтлом, состоянием пункта «Обновить»
+/// и перемером высоты карточки.
 ///
 /// Создавать на главном потоке (единственный владелец — AppDelegate приложения).
 public final class StatusItemController: NSObject, NSMenuDelegate {
@@ -124,7 +125,18 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     private func modelDidChange() {
         statusItem.button?.title = model.menuTitle
+        updateRefreshItemEnabledState()
         resizeCardToContent()
+    }
+
+    /// Загруженность меняется и при открытом меню (тик обновления работает
+    /// в .common-режиме run loop) — состояние пункта «Обновить» синхронизируем
+    /// живьём, не дожидаясь пересборки в `menuNeedsUpdate`.
+    private func updateRefreshItemEnabledState() {
+        guard let menu else { return }
+        for item in menu.items where item.tag == StatusMenuAction.refresh.rawValue {
+            item.isEnabled = !model.isLoading
+        }
     }
 
     // MARK: - NSMenuDelegate

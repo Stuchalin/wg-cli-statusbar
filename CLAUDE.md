@@ -30,7 +30,7 @@ Two targets (see `Package.swift`); note directory names don't match target names
     - `DumpParser.swift` — global `parseWGShowDump(String) -> [WGInterface]` (tab-separated; interface line = 5 fields, peer line = 9; epoch `0` = never; `(none)` → nil).
     - `HandshakeFreshness.swift` — freshness enum with thresholds (fresh ≤ 120 s, aging ≤ 600 s) and `RouteScope` (fullTunnel/splitTunnel/none from allowed ips).
     - `Formatters.swift` — `formatBytes` (binary KiB/MiB/GiB) and `formatAgo` ("N ago").
-    - `WireGuardTunnelNamer.swift` — resolves `utun2` → wg-quick config name (`work-vpn`) from `/var/run/wireguard/*.name` validated by an adjacent `<utun>.sock`; lock-protected cache, injectable file system.
+    - `WireGuardTunnelNamer.swift` — resolves `utun2` → wg-quick config name (`work-vpn`) from `/var/run/wireguard/*.name` validated by an adjacent `<utun>.sock` with consistent mtime (|Δ| < 2 s, mirroring `get_real_interface` from wg-quick's darwin.bash — the sock is per-interface, so a recreated sock exposes a lingering stale `.name` on a reused utun); lock-protected cache with per-lookup re-validation of the `.name`/`.sock` pair (a reused utun must not show a stale config name), injectable file system.
     - `StatusCardView.swift` — `StatusCardViewModel` (pure, tested) + thin SwiftUI `StatusCardView`.
     - `StatusItemController.swift` — owns `NSStatusItem` and `NSMenu`; menu structure as data (`StatusMenuStructure`/`StatusMenuFactory`, tested) + `CardMenuItem` (native highlight disabled).
 

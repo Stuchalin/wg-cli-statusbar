@@ -56,6 +56,24 @@ final class ProcessWGShowRunnerTests: XCTestCase {
         }
     }
 
+    func testLaunchFailureSurfacesError() async throws {
+        // run() бросает: читатели пайпов не должны запускаться до успешного
+        // старта процесса, иначе виснут на незакрытых write-концах.
+        let runner = ProcessWGShowRunner(
+            executableURL: URL(fileURLWithPath: "/nonexistent/wgstatusbar-test-binary"),
+            arguments: ["-f", "-c", "printf hello"],
+            timeout: 5
+        )
+
+        do {
+            _ = try await runner.runDump()
+            XCTFail("несуществующий исполняемый файл должен давать ошибку")
+        } catch {
+            // Точная категория ошибки запуска не фиксируется — важно, что
+            // бросок пробрасывается, а не теряется.
+        }
+    }
+
     func testLargeOutputBeyondPipeBufferIsDrained() async throws {
         // 200 KB > буфера пайпа (~64 KiB): без параллельного чтения процесс
         // блокировался бы на записи и падал по таймауту вместо данных
