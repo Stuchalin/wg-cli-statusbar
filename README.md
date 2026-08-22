@@ -64,7 +64,7 @@ swift build -c release
 swift test --enable-code-coverage
 ```
 
-Current test suite covers 87 tests:
+Current test suite covers:
 - handshake freshness classification and route scope (full/split tunnel)
 - byte and "N ago" formatters
 - `wg show all dump` parser (including secret-leak checks)
