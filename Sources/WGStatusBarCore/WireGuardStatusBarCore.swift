@@ -52,7 +52,7 @@ public struct StatusMenuView: View {
                 ForEach(model.interfaces) { interface in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
-                            Text(interface.name)
+                            Text(interface.displayName)
                                 .font(.subheadline)
                                 .bold()
                             Spacer()
@@ -72,8 +72,12 @@ public struct StatusMenuView: View {
                                         .font(.caption2)
                                         .lineLimit(1)
                                         .truncationMode(.middle)
+                                    Text("↓ \(Formatters.formatBytes(peer.rxBytes))  ↑ \(Formatters.formatBytes(peer.txBytes))")
+                                        .font(.caption2)
+                                        .monospacedDigit()
+                                        .foregroundStyle(.secondary)
                                     if let handshake = peer.latestHandshake {
-                                        Text(L10n.string("peer.handshake", handshake))
+                                        Text(L10n.string("peer.handshake", Formatters.formatAgo(handshake)))
                                             .font(.caption2)
                                             .foregroundStyle(peer.isActive ? .green : .secondary)
                                     } else {
@@ -177,7 +181,7 @@ public final class WireGuardStatusModel: ObservableObject {
         Task.detached {
             do {
                 let output = try await Self.runWGShow()
-                let parsed = Self.parseWGShow(output)
+                let parsed = parseWGShowDump(output)
                 await MainActor.run { [weak self] in
                     guard let self else { return }
                     self.interfaces = parsed
@@ -287,129 +291,6 @@ public final class WireGuardStatusModel: ObservableObject {
         }
 
         return output
-    }
-
-    static func parseWGShow(_ output: String) -> [WGInterface] {
-        var interfaces: [WGInterface] = []
-        var currentInterfaceName: String?
-        var currentPeers: [WGPeer] = []
-        var currentPeer: WGPeer?
-
-        func flushInterfaceIfNeeded() {
-            guard let name = currentInterfaceName else { return }
-            var peers = currentPeers
-            if let peer = currentPeer {
-                peers.append(peer)
-            }
-            interfaces.append(WGInterface(name: name, peers: peers))
-            currentInterfaceName = nil
-            currentPeers = []
-            currentPeer = nil
-        }
-
-        for rawLine in output.split(whereSeparator: \.isNewline) {
-            let line = String(rawLine).trimmingCharacters(in: .whitespacesAndNewlines)
-
-            if line.hasPrefix("interface:") {
-                flushInterfaceIfNeeded()
-                currentInterfaceName = String(line.dropFirst("interface:".count)).trimmingCharacters(in: .whitespaces)
-                continue
-            }
-
-            if line.hasPrefix("peer:") {
-                if let peer = currentPeer {
-                    currentPeers.append(peer)
-                }
-                let key = String(line.dropFirst("peer:".count)).trimmingCharacters(in: .whitespaces)
-                currentPeer = WGPeer(publicKey: key)
-                continue
-            }
-
-            if line.hasPrefix("latest handshake:") {
-                let value = String(line.dropFirst("latest handshake:".count)).trimmingCharacters(in: .whitespaces)
-                if var peer = currentPeer {
-                    peer.latestHandshake = value
-                    currentPeer = peer
-                }
-                continue
-            }
-
-            if line.hasPrefix("allowed ips:") {
-                let value = String(line.dropFirst("allowed ips:".count)).trimmingCharacters(in: .whitespaces)
-                if var peer = currentPeer {
-                    peer.allowedIps = value
-                    currentPeer = peer
-                }
-                continue
-            }
-
-            if line.hasPrefix("endpoint:") {
-                let value = String(line.dropFirst("endpoint:".count)).trimmingCharacters(in: .whitespaces)
-                if var peer = currentPeer {
-                    peer.endpoint = value
-                    currentPeer = peer
-                }
-                continue
-            }
-
-            if line.hasPrefix("transfer:") {
-                let value = String(line.dropFirst("transfer:".count)).trimmingCharacters(in: .whitespaces)
-                if var peer = currentPeer {
-                    peer.transfer = value
-                    currentPeer = peer
-                }
-                continue
-            }
-        }
-
-        flushInterfaceIfNeeded()
-        return interfaces
-    }
-}
-
-public struct WGInterface: Identifiable {
-    public let id: String
-    public let name: String
-    public var peers: [WGPeer]
-
-    public var isConnected: Bool {
-        peers.contains { $0.isActive }
-    }
-
-    public init(name: String, peers: [WGPeer]) {
-        self.id = name
-        self.name = name
-        self.peers = peers
-    }
-}
-
-public struct WGPeer: Identifiable {
-    public let id: String
-    public let publicKey: String
-    public var latestHandshake: String?
-    public var endpoint: String?
-    public var allowedIps: String?
-    public var transfer: String?
-
-    public init(
-        publicKey: String,
-        latestHandshake: String? = nil,
-        endpoint: String? = nil,
-        allowedIps: String? = nil,
-        transfer: String? = nil
-    ) {
-        self.id = publicKey
-        self.publicKey = publicKey
-        self.latestHandshake = latestHandshake
-        self.endpoint = endpoint
-        self.allowedIps = allowedIps
-        self.transfer = transfer
-    }
-
-    public var isActive: Bool {
-        guard let handshake = latestHandshake else { return false }
-        let normalizedHandshake = handshake.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
-        return normalizedHandshake != "never"
     }
 }
 

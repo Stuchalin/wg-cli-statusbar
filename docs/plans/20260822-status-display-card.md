@@ -101,12 +101,12 @@
 - Modify: `Sources/WGStatusBarCore/WireGuardStatusBarCore.swift` (модель уезжает в Model.swift)
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 
-- [ ] тест: полный дамп (2 интерфейса, несколько пиров) — имена, endpoint, allowed ips, handshake epoch → `Date`, `0` → nil, rx/tx
-- [ ] тест: `(none)` в endpoint/allowed-ips, `off` keepalive; пустой вывод → []; мусорный вывод → []; мусорная строка между валидными — скипается, остальное парсится
-- [ ] тест: приватный ключ и PSK из дампа не появляются ни в одном поле модели (секреты не утекают)
-- [ ] заменить модель: `WGInterface { name, displayName, peers }`, `WGPeer { publicKey, endpoint, allowedIps, latestHandshake: Date?, rxBytes, txBytes: UInt64 }`; `isActive`/`isConnected` — через `HandshakeFreshness`
-- [ ] реализовать `parseWGShowDump(String) -> [WGInterface]`; удалить `parseWGShow` и старые тесты парсера
-- [ ] `swift test` — зелёные (старые тесты модели адаптировать под новую модель)
+- [x] тест: полный дамп (2 интерфейса, несколько пиров) — имена, endpoint, allowed ips, handshake epoch → `Date`, `0` → nil, rx/tx
+- [x] тест: `(none)` в endpoint/allowed-ips, `off` keepalive; пустой вывод → []; мусорный вывод → []; мусорная строка между валидными — скипается, остальное парсится
+- [x] тест: приватный ключ и PSK из дампа не появляются ни в одном поле модели (секреты не утекают)
+- [x] заменить модель: `WGInterface { name, displayName, peers }`, `WGPeer { publicKey, endpoint, allowedIps, latestHandshake: Date?, rxBytes, txBytes: UInt64 }`; `isActive`/`isConnected` — через `HandshakeFreshness`
+- [x] реализовать `parseWGShowDump(String) -> [WGInterface]`; удалить `parseWGShow` и старые тесты парсера
+- [x] `swift test` — зелёные (старые тесты модели адаптировать под новую модель)
 
 ### Task 4: WireGuardTunnelNamer — имена туннелей
 
