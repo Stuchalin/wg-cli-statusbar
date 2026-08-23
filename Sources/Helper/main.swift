@@ -18,7 +18,9 @@ do {
     try await server.run()
 } catch {
     // Ошибки setup (bind и пр.) — фатальные: launchd поднимет бинарь заново
-    // по KeepAlive, а stderr уходит в unified log для диагностики.
+    // по KeepAlive; stderr пишется в /var/log/wgstatusbar-helper.log
+    // (StandardErrorPath в plist из install-daemon.sh) и доступен для
+    // диагностики циклических падений.
     FileHandle.standardError.write(Data("WGStatusBarHelper: \(error)\n".utf8))
     exit(1)
 }

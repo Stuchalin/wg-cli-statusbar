@@ -37,9 +37,14 @@ done
 launchctl bootout system "$PLIST_PATH" 2>/dev/null || true
 
 mkdir -p "$HELPER_DIR"
-cp "$binary" "$HELPER_PATH"
-chmod 755 "$HELPER_PATH"
-chown root:wheel "$HELPER_PATH"
+# Copy to a temp name and rename over, never cp onto the live path: bootout
+# is async, the old daemon may still be running, and cp truncates its binary
+# in place (SIGBUS for the exiting process). rename swaps the inode, so a
+# running process keeps its pages.
+cp "$binary" "${HELPER_PATH}.new"
+chmod 755 "${HELPER_PATH}.new"
+chown root:wheel "${HELPER_PATH}.new"
+mv -f "${HELPER_PATH}.new" "$HELPER_PATH"
 
 cat > "$PLIST_PATH" <<EOF
 <?xml version="1.0" encoding="UTF-8"?>
@@ -56,6 +61,8 @@ cat > "$PLIST_PATH" <<EOF
     <true/>
     <key>KeepAlive</key>
     <true/>
+    <key>StandardErrorPath</key>
+    <string>/var/log/wgstatusbar-helper.log</string>
 </dict>
 </plist>
 EOF

@@ -36,7 +36,7 @@ The project is split into three targets:
 
 `wg` needs root, the menu-bar app doesn't want it. The gap is bridged by `WGStatusBarHelper`, a small root daemon managed by launchd:
 
-- It listens on `/var/run/wgstatusbar.sock` (mode `0660`, `root:admin`) and answers one request per connection: the app sends `show`, the daemon runs `wg show all dump` (found on its own in `/opt/homebrew/bin`, `/usr/local/bin` or `/usr/bin` — launchd has no user PATH), strips the secret fields, and replies with the dump.
+- It listens on `/var/run/wgstatusbar.sock` (mode `0660`, `root:admin`) and answers one request per connection: the app sends `show`, the daemon runs `wg show all dump` (found on its own in `/opt/homebrew/bin`, `/usr/local/bin`, `/opt/local/bin` or `/usr/bin` — launchd has no user PATH), strips the secret fields, and replies with the dump.
 - The service state is never stored — it is derived from facts on every 5-second tick (socket missing / daemon silent / outdated / healthy) and drives the menu item: **Install Service**, **Update Service** or **Remove Service**.
 - Install is one button in the menu. It runs the bundled `install-daemon.sh` through `osascript ... with administrator privileges`, so macOS shows the standard password / Touch ID prompt — one fingerprint for the whole install. The script is idempotent (bootout → copy binary → bootstrap), so **Update Service** is the same action again.
 - Updating the app ships a new helper when needed: the daemon reports its build number in every reply, and an app bundled with a newer `helperBuildNumber` offers the update item.
