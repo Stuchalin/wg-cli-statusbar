@@ -2,17 +2,6 @@ import AppKit
 import Combine
 import Foundation
 
-private enum WGShowError: LocalizedError {
-    case commandTimeout
-
-    var errorDescription: String? {
-        switch self {
-        case .commandTimeout:
-            return L10n.string("error.wg_show_timeout")
-        }
-    }
-}
-
 /// Запускает `wg show all dump` и возвращает сырой вывод; инжектится для тестов.
 public protocol WGShowCommandRunning {
     func runDump() async throws -> String
@@ -130,7 +119,7 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
         // Убитый сигналом или завершившийся с ошибкой при сработавшем
         // дедлайне — таймаут.
         if stateQueue.sync(execute: { timedOut }), process.terminationStatus != 0 {
-            throw WGShowError.commandTimeout
+            throw StatusFailure.commandTimeout
         }
 
         let output = String(data: outputData, encoding: .utf8) ?? ""
@@ -253,7 +242,7 @@ public final class WireGuardStatusModel: ObservableObject {
     }
 
     /// Любая ошибка раннера → `StatusFailure`: типизированные (сокет-раннер,
-    /// exit 127 фолбэка) проходят как есть, чужие (таймаут и сбой запуска
+    /// таймаут и exit 127 фолбэка) проходят как есть, чужие (сбой запуска
     /// процессного раннера) заворачиваются в `.generic` с их текстом —
     /// поведение строки ошибки не меняется.
     private static func failure(from error: Error) -> StatusFailure {

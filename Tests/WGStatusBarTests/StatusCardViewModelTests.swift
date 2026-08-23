@@ -265,4 +265,25 @@ final class StatusCardViewModelTests: XCTestCase {
         }
         XCTAssertTrue(keysWithPlaceholder.isEmpty, "у ключей карточки не должно быть плейсхолдеров: \(keysWithPlaceholder)")
     }
+
+    /// Сервисные ключи (пункты меню и ошибки демона/установки) обязаны лежать
+    /// в обеих таблицах: `NSLocalizedString` для отсутствующего ключа вернёт
+    /// сам ключ — пропавшая строка всплывёт пользователю как сырой ключ.
+    func testServiceKeysExistInBothLocalizations() throws {
+        for language in ["en", "ru"] {
+            let lprojPath = try XCTUnwrap(
+                Bundle.module.path(forResource: language, ofType: "lproj"),
+                "нет \(language).lproj в бандле модуля"
+            )
+            let bundle = Bundle(path: lprojPath)
+            for key in [
+                "button.install_service", "button.update_service", "button.remove_service",
+                "error.wg_missing", "error.daemon_outdated", "error.service_unreachable",
+                "error.install_script_missing",
+            ] {
+                let raw = bundle?.localizedString(forKey: key, value: "MISSING", table: "Localizable")
+                XCTAssertNotEqual(raw, "MISSING", "ключ \(key) отсутствует в \(language)")
+            }
+        }
+    }
 }

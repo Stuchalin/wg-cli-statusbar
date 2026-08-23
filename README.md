@@ -30,7 +30,7 @@ The project is split into three targets:
 - Data source is the machine-readable `wg show all dump` (tab-separated): exact epoch handshake times and byte counters. Interface lines have 5 fields, peer lines 9; empty values are `(none)`. Secret fields (private key, preshared key) never reach the app at all: the daemon replaces them with `(none)` before sending anything over the socket, and raw output is never logged on either side.
 - Peer is active while its handshake is fresh or aging (green/orange); interface is connected when any peer is active.
 - Tunnel names come from the wg-quick mechanism on macOS: `wg-quick up <config>` writes the actual interface name to `/var/run/wireguard/<config>.name`, validated by the adjacent `<utun>.sock`. Unknown interfaces fall back to the raw name (`utun2`).
-- Reading WireGuard state requires root; the app itself never runs as root — it talks to the privileged daemon (next section).
+- Reading WireGuard state requires root; in normal use the app itself never runs as root — it talks to the privileged daemon (next section). The dev fallback below runs a bare binary under sudo.
 
 ## Privileged daemon (no sudo)
 
@@ -47,7 +47,7 @@ Security notes:
 - Private and preshared keys are sanitized inside the daemon — the only place raw output exists — and replaced with `(none)` on the wire; the app process never sees a secret.
 - The install path runs a root shell script that lives in the user-writable app bundle. Between the prompt and the copy there is a TOCTOU window that is **deliberately not closed** with checksums — an accepted risk for an open-source tool with a technical audience. The proper fix is Developer ID signing + `SMAppService`, which is future distribution work; the daemon protocol is designed so that migration is a transport change.
 
-Dev fallback: `sudo .build/debug/WGStatusBar` still works without the daemon (direct process runner, picked automatically when the socket file is absent). To install the daemon manually from a dev build:
+Dev fallback: `sudo .build/debug/WGStatusBar` still works without the daemon (direct process runner, picked automatically when the socket file is absent). The menu's service item only works from the .app bundle — the install scripts ship inside it, so a bare dev binary reports a missing install script; install manually instead:
 
 ```bash
 sudo scripts/install-daemon.sh --binary .build/debug/WGStatusBarHelper

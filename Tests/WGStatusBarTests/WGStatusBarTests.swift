@@ -426,6 +426,20 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(model.serviceState, .absent, "без сокета состояние сервиса — absent")
     }
 
+    // MARK: - Модель: ошибка установки сервиса в карточку
+
+    func testReportServiceFailureSurfacesGenericErrorForOneTick() {
+        // Единственный канал ошибок установки в карточку (stderr скрипта или
+        // сбой osascript): текст — в lastFailure/lastError, следующий refresh
+        // сотрёт (модель тестируется без таймера и тика).
+        let model = WireGuardStatusModel(testing: [])
+
+        model.reportServiceFailure("boom")
+
+        XCTAssertEqual(model.lastFailure, .generic("boom"))
+        XCTAssertEqual(model.lastError, "boom")
+    }
+
     // MARK: - Гигиена ключей после удаления StatusMenuView
 
     /// Ключи, которые использовал только удалённый `StatusMenuView` (и ключи

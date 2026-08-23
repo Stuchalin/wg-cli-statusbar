@@ -26,8 +26,9 @@ internal func withUnixSocketAddress<R>(
     }
 }
 
-/// Флаг отмены: `onCancel` обработчика бежит не в задаче сервера, читается
-/// из accept-цикла — доступ из разных потоков под локом.
+/// Одноразовый флаг: ставится из одного потока, читается из другого
+/// (отмена сервера из `onCancel`-обработчика, «работа завершена» из задачи
+/// serveShow против цикла-наблюдателя) — доступ под локом.
 private final class CancelFlag {
     private let lock = NSLock()
     private var value = false
@@ -72,8 +73,8 @@ public enum DaemonServerError: Error, CustomStringConvertible {
 /// одно соединение за раз — соединение = один запрос. `show` → дамп у
 /// исполнителя → санитизация (единственная точка, где секступаются секреты) →
 /// `ok <protocol> <build>` + дамп; ошибка исполнителя → `err` с кодом.
-/// Отключившийся или молчащий клиент не подвешивает цикл: EOF забывается,
-/// тишина закрывается по дедлайну чтения.
+/// Отключившийся или молчащий клиент не подвешивает цикл: EOF отменяет
+/// ожидание ребёнка, тишина закрывается по дедлайну чтения.
 public final class DaemonServer {
     private let executor: WGShowExecuting
     private let socketPath: String
@@ -150,9 +151,15 @@ public final class DaemonServer {
             socklen_t(MemoryLayout<Int32>.size)
         )
 
+        // Файл сокета рождается с правами 0777 & ~umask: без пережатия umask
+        // между bind и chmod ниже файл существует с дефолтными правами.
+        // 0117 даёт 0660 сразу; umask — процесс-глобальная величина, между
+        // установкой и возвратом нет await, конкурирующих потоков в setup нет.
+        let previousUmask = umask(0o117)
         let bound = withUnixSocketAddress(path: path) { address, length in
             bind(fd, address, length)
         }
+        umask(previousUmask)
         guard bound == 0 else {
             close(fd)
             throw DaemonServerError.bindFailed(path: path, errno: Int(errno))
@@ -233,15 +240,78 @@ public final class DaemonServer {
     private func serveShow(to clientFD: Int32) async {
         let response: String
         do {
-            let rawDump = try await executor.runDump()
+            // План: EOF клиента посреди запроса — демон прекращает ожидание
+            // ребёнка; accept-loop не занят мёртвым клиентом до конца работы wg.
+            let rawDump = try await Self.runDumpCancellingOnClientEOF(fd: clientFD) {
+                try await self.executor.runDump()
+            }
             // Единственная точка санитизации: секреты не покидают демон.
             response = Self.okResponse(dump: sanitizeWGDump(rawDump))
+        } catch is CancellationError {
+            // Клиент ушёл (или сервер shutdown) — отвечать некому.
+            return
         } catch {
             response = Self.errResponse(for: error)
         }
         // Клиент мог уйти, пока работал исполнитель: провал записи — не ошибка
         // цикла, соединение и так закрывается после ответа.
         _ = await Self.writeResponse(fd: clientFD, text: response, deadline: readDeadline)
+    }
+
+    /// Гоняет работу исполнителя под наблюдением клиентского сокета: клиент,
+    /// закрывший соединение до ответа (EOF), отменяет работу — wg убивается
+    /// обработчиком отмены исполнителя. Завершившаяся работа останавливает
+    /// наблюдателя (флаг), отмена серверной задачи отменяет работу
+    /// (`onCancel`) — все три пути сходятся в `work.value`.
+    private static func runDumpCancellingOnClientEOF(
+        fd: Int32,
+        _ work: @escaping () async throws -> String
+    ) async throws -> String {
+        let work = Task { try await work() }
+        let workFinished = CancelFlag()
+        // Наблюдатель живёт своей жизнью: останавливается по EOF/ошибке либо
+        // по флагу после завершения работы (≤ одного poll-таймаута).
+        Task.detached {
+            Self.cancelWorkOnClientEOF(fd: fd, work: work, stop: workFinished)
+        }
+        return try await withTaskCancellationHandler {
+            // Работа завершена — наблюдателю пора выходить (максимум один
+            // poll-таймаут он ещё проживёт, поток глобального пула не течёт).
+            defer { workFinished.set() }
+            return try await work.value
+        } onCancel: {
+            work.cancel()
+        }
+    }
+
+    /// Ждёт EOF клиентского сокета (poll + `MSG_PEEK`: команда уже прочитана,
+    /// читаемость после этого — EOF либо лишние данные) и отменяет работу.
+    /// Выходит по EOF, ошибке наблюдения или флагу `stop`. poll/recv блокируют
+    /// поток — вызывается только из detached-задачи.
+    private static func cancelWorkOnClientEOF(
+        fd: Int32,
+        work: Task<String, Error>,
+        stop: CancelFlag
+    ) {
+        while !stop.isSet {
+            var pollDescriptor = pollfd(fd: fd, events: Int16(POLLIN), revents: 0)
+            let ready = poll(&pollDescriptor, 1, 100)
+            if ready == 0 { continue }
+            if ready < 0 {
+                if errno == EINTR { continue }
+                return  // ошибка наблюдения — работу не трогаем
+            }
+            var probe: UInt8 = 0
+            let peeked = recv(fd, &probe, 1, MSG_PEEK)
+            if peeked == 0 {
+                work.cancel()  // EOF: клиент ушёл до ответа
+                return
+            }
+            if peeked < 0 && errno != EINTR {
+                return
+            }
+            // peeked > 0: лишние данные от клиента — не EOF, ждём дальше.
+        }
     }
 
     // MARK: - Wire-ответы

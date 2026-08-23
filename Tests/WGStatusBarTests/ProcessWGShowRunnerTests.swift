@@ -91,7 +91,10 @@ final class ProcessWGShowRunnerTests: XCTestCase {
         do {
             _ = try await runner.runDump()
             XCTFail("зависший процесс должен падать по таймауту")
-        } catch {
+        } catch let error as StatusFailure {
+            // Таймаут фолбэка — типизированная ошибка (тот же кейс, что у
+            // сокет-раннера), не generic-строка.
+            XCTAssertEqual(error, .commandTimeout)
             XCTAssertEqual(error.localizedDescription, L10n.string("error.wg_show_timeout"))
         }
     }

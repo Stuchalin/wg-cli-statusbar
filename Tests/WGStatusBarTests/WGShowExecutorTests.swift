@@ -104,10 +104,15 @@ final class WGShowExecutorTests: XCTestCase {
         )
     }
 
-    func testTaskCancellationThrowsCancellationError() async throws {
+    func testTaskCancellationThrowsCancellationErrorAndKillsChild() async throws {
         // Отмена задачи (клиент ушёл по EOF посреди запроса) обязана убить
         // ребёнка и бросить CancellationError, а не висеть до таймаута wg.
-        let executor = makeExecutor(arguments: ["-f", "-c", "sleep 30"], timeout: 30)
+        let pidFile = NSTemporaryDirectory().appending("wgstatusbar-executor-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let executor = makeExecutor(
+            arguments: ["-f", "-c", "printf '%s\\n' $$ > \(pidFile); sleep 30"],
+            timeout: 30
+        )
         let task = Task.detached(priority: .medium) {
             try await executor.runDump()
         }
@@ -121,6 +126,50 @@ final class WGShowExecutorTests: XCTestCase {
         } catch {
             XCTAssertTrue(error is CancellationError, "ожидалась CancellationError, получено: \(error)")
         }
+
+        // Броска мало: ребёнок обязан быть убит (kill(pid, 0) → ESRCH), иначе
+        // отменённые запросы оставляют демону висячие wg-процессы.
+        let pidData = try String(contentsOfFile: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(Int32(pidData), "стаб должен записать свой pid")
+        XCTAssertTrue(
+            Self.waitUntilProcessDies(pid, within: 3),
+            "процесс \(pid) должен быть убит по отмене задачи"
+        )
+    }
+
+    func testLaunchFailureSurfacesWgFailedWithoutHanging() async throws {
+        // run() бросает (бинарь без права исполнения): провал запуска —
+        // wgFailed, читатели пайпов не стартуют до успешного run() — не висят
+        // на незакрытых write-концах.
+        let notExecutable = NSTemporaryDirectory().appending("wgstatusbar-executor-noexec-\(UUID().uuidString)")
+        try "not a program".write(toFile: notExecutable, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: notExecutable) }
+
+        let executor = WGShowExecutor(
+            resolver: WGBinaryResolver(searchPaths: [notExecutable], fileExists: { _ in true }),
+            arguments: ["-f", "-c", "printf hello"],
+            timeout: 5
+        )
+
+        do {
+            _ = try await executor.runDump()
+            XCTFail("неисполняемый бинарь должен давать ошибку запуска")
+        } catch let error as WGShowExecutorError {
+            guard case .wgFailed = error else {
+                return XCTFail("ожидался wgFailed, получено: \(error)")
+            }
+        }
+    }
+
+    func testLargeOutputBeyondPipeBufferIsDrained() async throws {
+        // 200 KB > буфера пайпа (~64 KiB): без параллельного чтения стаб
+        // блокировался бы на записи и падал по таймауту вместо данных.
+        let executor = makeExecutor(arguments: ["-f", "-c", "head -c 200000 /dev/zero | tr '\\0' x"])
+
+        let output = try await executor.runDump()
+
+        XCTAssertEqual(output.count, 200_000)
     }
 
     /// Поллит `kill(pid, 0)` до ESRCH: зомби считается живым, пока статус

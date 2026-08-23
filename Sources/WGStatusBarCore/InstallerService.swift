@@ -35,14 +35,22 @@ public final class InstallerService {
     private let bundle: Bundle
     /// Путь бинаря демона для `install-daemon.sh --binary <путь>`.
     private let binaryPath: String?
+    /// Запуск osascript; инжектируется для тестов диспетчеризации колбэков —
+    /// сам запуск с системным промптом не автоматизируется (Testing Strategy).
+    private let runOsa: ([String]) -> InstallResult
 
     public convenience init() {
         self.init(bundle: .main)
     }
 
-    public init(bundle: Bundle, binaryPath: String? = nil) {
+    public init(
+        bundle: Bundle,
+        binaryPath: String? = nil,
+        runOsa: (([String]) -> InstallResult)? = nil
+    ) {
         self.bundle = bundle
         self.binaryPath = binaryPath ?? Self.defaultBinaryPath(in: bundle)
+        self.runOsa = runOsa ?? Self.runOsaScript
     }
 
     /// Путь хелпера в бандле приложения — туда его кладёт build-app.sh.
@@ -67,18 +75,35 @@ public final class InstallerService {
 
     /// argv запуска osascript: системный промпт + shell-команда. Пути в
     /// одинарных кавычках внутри двойных кавычек AppleScript — пробелы не рвут
-    /// ни строку AppleScript, ни shell-команду. Install передаёт
-    /// `--binary <путь>`, uninstall зовётся без него.
+    /// ни строку AppleScript, ни shell-команду. Путь к .app выбирает
+    /// пользователь (апостроф в имени каталога реален), а команда исполняется
+    /// от root — поэтому оба слоя экранируются: `'` для shell, `"` и `\` для
+    /// литерала AppleScript. Install передаёт `--binary <путь>`, uninstall
+    /// зовётся без него.
     public static func osascriptCommand(scriptPath: String, binaryPath: String?) -> [String] {
-        var shellCommand = "'\(scriptPath)'"
+        var shellCommand = shellQuoted(scriptPath)
         if let binaryPath {
-            shellCommand += " --binary '\(binaryPath)'"
+            shellCommand += " --binary " + shellQuoted(binaryPath)
         }
         return [
             "/usr/bin/osascript",
             "-e",
-            "do shell script \"\(shellCommand)\" with administrator privileges"
+            "do shell script \"\(applescriptEscaped(shellCommand))\" with administrator privileges"
         ]
+    }
+
+    /// Оборачивает путь одинарными кавычками; встроенный апостроф закрывается
+    /// и переоткрывается (`'\''`) — стандартный способ выжить в POSIX-shell.
+    private static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Экранирует `\` и `"` для строкового литерала AppleScript — путь
+    /// проходит через два слоя (AppleScript-строка → shell-команда).
+    private static func applescriptEscaped(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
     /// Разбор кода возврата osascript: успех; «User canceled» в stderr —
@@ -121,8 +146,9 @@ public final class InstallerService {
             argv = value
         }
 
+        let runOsa = self.runOsa
         let result = await Task.detached(priority: .userInitiated) {
-            Self.runOsaScript(argv)
+            runOsa(argv)
         }.value
 
         await MainActor.run {

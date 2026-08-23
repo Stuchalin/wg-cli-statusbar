@@ -5,12 +5,12 @@ import WGStatusBarCore
 // main-файлов, как у Sources/App/main.swift). Вся логика — в WGStatusBarCore:
 // сервер санитизирует дамп до отправки, исполнитель резолвит и запускает wg.
 
-/// Продакшн-сокет демона; права 0660 root:admin ставит сервер при bind.
-let daemonSocketPath = "/var/run/wgstatusbar.sock"
-
+// Сокет демона — общий с приложением (`helperSocketPath` из Core, один
+// источник: пути app и helper не могут разойтись); права 0660 root:admin
+// ставит сервер при bind.
 let server = DaemonServer(
     executor: WGShowExecutor(),
-    socketPath: daemonSocketPath
+    socketPath: helperSocketPath
 )
 
 do {

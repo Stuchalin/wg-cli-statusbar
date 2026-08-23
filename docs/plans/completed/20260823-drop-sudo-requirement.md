@@ -362,9 +362,9 @@ final class InstallerService {
 
 ### Task 14: [Final] Update documentation
 
-- [ ] README: убрать «sudo limitation», добавить раздел про демон (установка кнопкой, Touch ID, TOCTOU-заметка, ручной чеклист тестовой машины)
-- [ ] CLAUDE.md: архитектура — цель `WGStatusBarHelper`, протокол, состояния сервиса, пути/сокет, правило бампа `helperBuildNumber`
-- [ ] `docs/plans/completed/` — перенести план
+- [x] README: убрать «sudo limitation», добавить раздел про демон (установка кнопкой, Touch ID, TOCTOU-заметка, ручной чеклист тестовой машины)
+- [x] CLAUDE.md: архитектура — цель `WGStatusBarHelper`, протокол, состояния сервиса, пути/сокет, правило бампа `helperBuildNumber`
+- [x] `docs/plans/completed/` — перенести план
 
 ## Post-Completion
 

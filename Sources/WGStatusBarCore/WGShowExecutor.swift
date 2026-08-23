@@ -46,7 +46,13 @@ private final class ChildProcessHandle {
         defer { lock.unlock() }
         cancelled = true
         if let process {
-            kill(process.processIdentifier, SIGTERM)
+            // Регистрация идёт до run(): у ещё не запущенного процесса pid == 0,
+            // а kill(0, SIGTERM) шлёт сигнал всей группе процессов демона.
+            // Сигнал — только живому ребёнку.
+            let pid = process.processIdentifier
+            if pid > 0 {
+                kill(pid, SIGTERM)
+            }
         }
     }
 

@@ -40,6 +40,24 @@ final class InstallerServiceTests: XCTestCase {
         ])
     }
 
+    func testOsascriptCommandEscapesApostrophesAndQuotesInPaths() {
+        // Путь к .app выбирает пользователь (апостроф в каталоге реален), а
+        // команда исполняется от root: разрыв shell-кавычки — мусорная команда
+        // или инъекция. `'` → `'\''` (shell), затем `\` → `\\` и `"` → `\"`
+        // (AppleScript-литерал поверх shell-кавычек — AppleScript развернёт
+        // их обратно в `'\''` и `"`).
+        let command = InstallerService.osascriptCommand(
+            scriptPath: "/tmp/Denis' \"apps\"/WGStatusBar.app/Contents/Resources/install-daemon.sh",
+            binaryPath: "/tmp/Denis' \"apps\"/WGStatusBar.app/Contents/MacOS/WGStatusBarHelper"
+        )
+
+        XCTAssertEqual(command, [
+            "/usr/bin/osascript",
+            "-e",
+            "do shell script \"'/tmp/Denis'\\\\'' \\\"apps\\\"/WGStatusBar.app/Contents/Resources/install-daemon.sh' --binary '/tmp/Denis'\\\\'' \\\"apps\\\"/WGStatusBar.app/Contents/MacOS/WGStatusBarHelper'\" with administrator privileges"
+        ])
+    }
+
     // MARK: - interpret
 
     func testInterpretZeroExitCodeIsSuccess() {
@@ -62,6 +80,15 @@ final class InstallerServiceTests: XCTestCase {
         XCTAssertEqual(
             InstallerService.interpret(exitCode: 2, stderr: "install-daemon.sh: cp failed\n"),
             .failure("install-daemon.sh: cp failed")
+        )
+    }
+
+    func testInterpretFailureWithoutStderrReportsExitCode() {
+        // Ненулевой exit с пустым stderr (или только пробелами) — текста нет,
+        // но код возврата обязан доехать до ошибки.
+        XCTAssertEqual(
+            InstallerService.interpret(exitCode: 3, stderr: " \n\t"),
+            .failure("exit code 3")
         )
     }
 
@@ -119,6 +146,61 @@ final class InstallerServiceTests: XCTestCase {
                 "do shell script \"'/tmp/app/Contents/Resources/install-daemon.sh' --binary '/tmp/app/Contents/MacOS/WGStatusBarHelper'\" with administrator privileges"
             ])
         )
+    }
+
+    // MARK: - Инстанс: колбэки успеха/сбоя (запуск osascript инжектирован)
+
+    func testInstallWithoutScriptReportsFailureAndSkipsOsaScript() async throws {
+        // Dev-запуск голого бинаря: скрипта в бандле нет — локализованная
+        // ошибка в onFailure до запуска osascript, onSuccess не зовётся.
+        let appURL = try makeFakeAppBundle(withScripts: false)
+        defer { try? FileManager.default.removeItem(at: appURL) }
+        let bundle = try XCTUnwrap(Bundle(url: appURL))
+        let installer = InstallerService(bundle: bundle, runOsa: { _ in
+            XCTFail("без скрипта osascript запускаться не должен")
+            return .failure("unexpected osascript run")
+        })
+
+        var failureMessage: String?
+        var successCount = 0
+        installer.onFailure = { failureMessage = $0 }
+        installer.onSuccess = { successCount += 1 }
+
+        await installer.install()
+
+        XCTAssertEqual(failureMessage, L10n.string("error.install_script_missing"))
+        XCTAssertEqual(successCount, 0)
+    }
+
+    func testRunDispatchesInstallResultToCallbacks() async throws {
+        // Таблично: успех → onSuccess; отмена промпта — тихий no-op (ни один
+        // колбэк); сбой — onFailure с текстом. Запуск osascript инжектирован —
+        // системного промпта нет, диспетчеризация проверяется напрямую.
+        let cases: [(result: InstallResult, expectSuccess: Bool, expectFailure: String?)] = [
+            (InstallResult.success, true, nil),
+            (InstallResult.cancelled, false, nil),
+            (InstallResult.failure("script failed"), false, "script failed"),
+        ]
+
+        for testCase in cases {
+            let appURL = try makeFakeAppBundle(withScripts: true)
+            defer { try? FileManager.default.removeItem(at: appURL) }
+            let bundle = try XCTUnwrap(Bundle(url: appURL))
+            let installer = InstallerService(bundle: bundle, runOsa: { _ in testCase.result })
+
+            var failureMessage: String?
+            var successCount = 0
+            installer.onFailure = { failureMessage = $0 }
+            installer.onSuccess = { successCount += 1 }
+
+            await installer.install()
+
+            XCTAssertEqual(
+                successCount, testCase.expectSuccess ? 1 : 0,
+                "результат \(testCase.result): onSuccess"
+            )
+            XCTAssertEqual(failureMessage, testCase.expectFailure, "результат \(testCase.result): onFailure")
+        }
     }
 
     // MARK: - Фикстура фейкового .app
