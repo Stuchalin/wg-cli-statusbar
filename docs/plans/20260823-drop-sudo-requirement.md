@@ -261,14 +261,14 @@ final class InstallerService {
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 
-- [ ] тест: round-trip с `DaemonServer` на tmp-сокете — возвращает дамп-текст (после санитизации сервером; контракт `WGShowCommandRunning` не меняется)
-- [ ] тест: `err wg-missing` → `.wgMissing`; `err wg-failed <detail>` → `.generic(detail)`; коннект отклонён → `.connectionRefused`; молчание до дедлайна → `.commandTimeout`; мусор/мгновенный EOF → `.badResponse`
-- [ ] тест: заголовок (`ok` или `err`) с чужим `protocol` или меньшим `build` → `.daemonOutdated`
-- [ ] реализация: `SocketWGShowRunner` (connect+send+read до EOF под 5-секундным дедлайном, декод через Task 1)
-- [ ] реализация: enum типизированной ошибки статуса (`wgMissing`, `commandTimeout`, `daemonOutdated`, `connectionRefused`, `badResponse`, `generic(String)` + localizedMessage; L10n-ключи `error.wg_missing`, `error.daemon_outdated`, `error.service_unreachable` — в обоих lproj в этой задаче; `commandTimeout` переиспользует существующий `error.wg_show_timeout`)
-- [ ] мост для карточки: `@Published lastFailure: StatusFailure?`, `lastError: String?` — вычисляемая строка из него; `StatusCardView` читает `model.lastError` без правок (тип `String?` сохраняется)
-- [ ] обновить существующие тесты модели под типизированную ошибку (сеттер `lastError` в `openWireGuardConfigFolder` переезжает на `lastFailure = .generic(...)` — вычисляемое свойство сеттера не имеет)
-- [ ] `swift test` зелёный
+- [x] тест: round-trip с `DaemonServer` на tmp-сокете — возвращает дамп-текст (после санитизации сервером; контракт `WGShowCommandRunning` не меняется)
+- [x] тест: `err wg-missing` → `.wgMissing`; `err wg-failed <detail>` → `.generic(detail)`; коннект отклонён → `.connectionRefused`; молчание до дедлайна → `.commandTimeout`; мусор/мгновенный EOF → `.badResponse`
+- [x] тест: заголовок (`ok` или `err`) с чужим `protocol` или меньшим `build` → `.daemonOutdated`
+- [x] реализация: `SocketWGShowRunner` (connect+send+read до EOF под 5-секундным дедлайном, декод через Task 1)
+- [x] реализация: enum типизированной ошибки статуса (`wgMissing`, `commandTimeout`, `daemonOutdated`, `connectionRefused`, `badResponse`, `generic(String)` + localizedMessage; L10n-ключи `error.wg_missing`, `error.daemon_outdated`, `error.service_unreachable` — в обоих lproj в этой задаче; `commandTimeout` переиспользует существующий `error.wg_show_timeout`)
+- [x] мост для карточки: `@Published lastFailure: StatusFailure?`, `lastError: String?` — вычисляемая строка из него; `StatusCardView` читает `model.lastError` без правок (тип `String?` сохраняется)
+- [x] обновить существующие тесты модели под типизированную ошибку (сеттер `lastError` в `openWireGuardConfigFolder` переезжает на `lastFailure = .generic(...)` — вычисляемое свойство сеттера не имеет)
+- [x] `swift test` зелёный
 
 ### Task 7: Фолбэк-раннер — exit 127 → wg-missing
 

@@ -365,6 +365,10 @@ final class WGStatusBarTests: XCTestCase {
         waitUntil({ !model.isLoading && model.lastError != nil }, "ошибочный refresh должен завершиться с lastError")
 
         XCTAssertNotNil(model.lastError, "ошибка команды должна попасть в lastError")
+        // Чужая (не StatusFailure) ошибка раннера заворачивается в .generic с её текстом.
+        if case .generic = model.lastFailure {} else {
+            XCTFail("чужая ошибка раннера должна заворачиваться в .generic, получили \(String(describing: model.lastFailure))")
+        }
         XCTAssertEqual(model.interfaces.count, 1, "данные последнего успешного тика должны остаться")
         XCTAssertEqual(model.interfaces[0].displayName, "work-vpn")
 
@@ -373,6 +377,29 @@ final class WGStatusBarTests: XCTestCase {
 
         XCTAssertNil(model.lastError, "lastError живёт один цикл refresh")
         XCTAssertEqual(model.interfaces[0].name, "utun7", "успешный тик должен обновить данные")
+    }
+
+    // MARK: - Модель: мост типизированной ошибки в строку карточки
+
+    func testRefreshTypedFailureBridgesToLastErrorString() {
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .failure(StatusFailure.wgMissing),
+                .failure(StatusFailure.daemonOutdated),
+            ]),
+            tunnelNamer: MockTunnelNamer()
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "refresh с типизированной ошибкой должен завершиться")
+
+        XCTAssertEqual(model.lastFailure, .wgMissing, "StatusFailure от раннера проходит в модель как есть")
+        XCTAssertEqual(model.lastError, L10n.string("error.wg_missing"), "карточка получает локализованную строку из lastFailure")
+
+        model.refresh()
+        waitUntil({ model.lastFailure == .daemonOutdated }, "второй refresh должен опубликовать daemonOutdated")
+
+        XCTAssertEqual(model.lastError, L10n.string("error.daemon_outdated"))
     }
 
     // MARK: - Гигиена ключей после удаления StatusMenuView

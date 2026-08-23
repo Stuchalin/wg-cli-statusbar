@@ -164,7 +164,8 @@ extension WireGuardTunnelNamer: WireGuardTunnelNaming {}
 public final class WireGuardStatusModel: ObservableObject {
     @Published public private(set) var interfaces: [WGInterface] = []
     @Published public private(set) var isLoading = false
-    @Published public private(set) var lastError: String?
+    /// Типизированная ошибка последнего тика; живёт один refresh-цикл.
+    @Published public private(set) var lastFailure: StatusFailure?
 
     private let commandRunner: WGShowCommandRunning
     private let tunnelNamer: WireGuardTunnelNaming
@@ -200,6 +201,20 @@ public final class WireGuardStatusModel: ObservableObject {
         interfaces.contains(where: \.isConnected)
     }
 
+    /// Строка ошибки для карточки, вычисляется из `lastFailure`; тип `String?`
+    /// сохранён — `StatusCardView` читает её без правок. Обновления едут через
+    /// `objectWillChange` от `lastFailure`, сеттера нет.
+    public var lastError: String? {
+        lastFailure?.localizedMessage
+    }
+
+    /// Любая ошибка раннера → `StatusFailure`: типизированные проходят как
+    /// есть, чужие (фолбэк-раннер до Task 7) заворачиваются в `.generic` с их
+    /// текстом — поведение строки ошибки не меняется.
+    private static func failure(from error: Error) -> StatusFailure {
+        error as? StatusFailure ?? .generic(error.localizedDescription)
+    }
+
     public var menuTitle: String {
         isAnyConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
@@ -213,7 +228,7 @@ public final class WireGuardStatusModel: ObservableObject {
         refreshGeneration += 1
         let generation = refreshGeneration
         isLoading = true
-        lastError = nil
+        lastFailure = nil
 
         let runner = commandRunner
         let namer = tunnelNamer
@@ -233,7 +248,7 @@ public final class WireGuardStatusModel: ObservableObject {
             } catch {
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
-                    self.lastError = error.localizedDescription
+                    self.lastFailure = Self.failure(from: error)
                     self.isLoading = false
                 }
             }
@@ -289,7 +304,7 @@ public final class WireGuardStatusModel: ObservableObject {
                 return
             }
         }
-        lastError = L10n.string("error.config_folder_not_found")
+        lastFailure = .generic(L10n.string("error.config_folder_not_found"))
     }
 
     private func startTimer() {

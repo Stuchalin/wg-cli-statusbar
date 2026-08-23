@@ -8,6 +8,9 @@
 "error.config_folder_not_found" = "WireGuard config folder was not found";
 "error.wg_show_failed" = "Command `wg show all dump` finished with code %@";
 "error.wg_show_timeout" = "Command `wg show all dump` timed out";
+"error.wg_missing" = "WireGuard CLI is not installed";
+"error.daemon_outdated" = "Helper service is outdated — update it from the menu";
+"error.service_unreachable" = "Helper service is unreachable";
 "ago.seconds" = "%@ s ago";
 "ago.minutes" = "%@ min ago";
 "ago.hours" = "%@ h ago";
