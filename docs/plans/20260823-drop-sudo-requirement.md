@@ -344,10 +344,10 @@ final class InstallerService {
 - Create: `scripts/uninstall-daemon.sh`
 - Modify: `scripts/build-app.sh`
 
-- [ ] `install-daemon.sh --binary <путь>`: идемпотентный (bootout-игнор → cp 755 root:wheel в `/Library/PrivilegedHelperTools/com.stuchalin.wgstatusbar.helper` → plist `RunAtLoad`+`KeepAlive` → `bootstrap system`)
-- [ ] `uninstall-daemon.sh`: `bootout` → удаление plist, бинаря, сокета
-- [ ] `build-app.sh`: копирует `WGStatusBarHelper` в `Contents/MacOS/`, скрипты — в `Contents/Resources/`; `bash -n` на оба скрипта
-- [ ] `scripts/build-app.sh` собирается без ошибок; `swift test` зелёный
+- [x] `install-daemon.sh --binary <путь>`: идемпотентный (bootout-игнор → cp 755 root:wheel в `/Library/PrivilegedHelperTools/com.stuchalin.wgstatusbar.helper` → plist `RunAtLoad`+`KeepAlive` → `bootstrap system`)
+- [x] `uninstall-daemon.sh`: `bootout` → удаление plist, бинаря, сокета
+- [x] `build-app.sh`: копирует `WGStatusBarHelper` в `Contents/MacOS/`, скрипты — в `Contents/Resources/`; `bash -n` на оба скрипта
+- [x] `scripts/build-app.sh` собирается без ошибок; `swift test` зелёный
 
 ### Task 13: Verify acceptance criteria
 
