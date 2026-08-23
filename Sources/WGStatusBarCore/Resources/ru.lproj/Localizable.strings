@@ -11,6 +11,8 @@
 "error.wg_missing" = "CLI WireGuard не установлен";
 "error.daemon_outdated" = "Служба-помощник устарела — обновите её из меню";
 "error.service_unreachable" = "Служба-помощник недоступна";
+"card.copy" = "Копировать";
+"card.copied" = "Скопировано";
 "ago.seconds" = "%@ с назад";
 "ago.minutes" = "%@ мин назад";
 "ago.hours" = "%@ ч назад";

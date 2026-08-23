@@ -303,10 +303,10 @@ final class InstallerService {
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 - Modify: `Tests/WGStatusBarTests/StatusCardViewModelTests.swift`
 
-- [ ] тест: ViewModel при `.wgMissing` — человекочитаемое сообщение + команды `brew install wireguard-tools` и `sudo port install wireguard-tools` (константами, не L10n)
-- [ ] тест: прочие ошибки — прежний рендер
-- [ ] реализация: ViewModel-состояние + SwiftUI-блок команд (моноширинно, клик = копирование в pasteboard, краткая индикация «скопировано»); L10n-ключи `card.copy`, `card.copied` добавить в оба lproj в этой задаче
-- [ ] `swift test` зелёный
+- [x] тест: ViewModel при `.wgMissing` — человекочитаемое сообщение + команды `brew install wireguard-tools` и `sudo port install wireguard-tools` (константами, не L10n)
+- [x] тест: прочие ошибки — прежний рендер
+- [x] реализация: ViewModel-состояние + SwiftUI-блок команд (моноширинно, клик = копирование в pasteboard, краткая индикация «скопировано»); L10n-ключи `card.copy`, `card.copied` добавить в оба lproj в этой задаче
+- [x] `swift test` зелёный
 
 ### Task 10: InstallerService — установка через osascript
 

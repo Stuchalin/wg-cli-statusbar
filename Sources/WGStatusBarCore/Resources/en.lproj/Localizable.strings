@@ -11,6 +11,8 @@
 "error.wg_missing" = "WireGuard CLI is not installed";
 "error.daemon_outdated" = "Helper service is outdated — update it from the menu";
 "error.service_unreachable" = "Helper service is unreachable";
+"card.copy" = "Copy";
+"card.copied" = "Copied";
 "ago.seconds" = "%@ s ago";
 "ago.minutes" = "%@ min ago";
 "ago.hours" = "%@ h ago";
