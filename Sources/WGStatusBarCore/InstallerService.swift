@@ -106,12 +106,15 @@ public final class InstallerService {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// Разбор кода возврата osascript: успех; «User canceled» в stderr —
+    /// Разбор кода возврата osascript: успех; отмена промпта пароль/Touch ID —
     /// пользователь закрыл промпт, тихий no-op; остальное — сбой со stderr.
+    /// Отмена детектится по номеру ошибки AppleScript `(-128)` в конце stderr:
+    /// текст локализуется системой («User canceled» / «Отменено пользователем»),
+    /// номер — нет.
     public static func interpret(exitCode: Int, stderr: String) -> InstallResult {
         guard exitCode != 0 else { return .success }
         let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
-        if trimmed.contains("User canceled") {
+        if trimmed.contains("(-128)") || trimmed.contains("User canceled") {
             return .cancelled
         }
         return .failure(trimmed.isEmpty ? "exit code \(exitCode)" : trimmed)

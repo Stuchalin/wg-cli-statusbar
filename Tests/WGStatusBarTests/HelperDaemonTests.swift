@@ -367,6 +367,34 @@ final class HelperDaemonTests: XCTestCase {
         XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
     }
 
+    func testExtraDataAfterCommandDoesNotDisturbResponse() async throws {
+        // Лишние данные после строки команды (протокол — одна строка на
+        // соединение): наблюдатель EOF поглощает их по байту, не мешая ни
+        // ответу, ни детекции EOF — ответ доходит, цикл жив.
+        let executor = StubExecutor()
+        // Задержка: мусор гарантированно попадает в сокет, пока работает
+        // исполнитель и живёт наблюдатель.
+        executor.configure(dump: "dump", delay: 0.1)
+        try await startServer(executor: executor)
+
+        let fd = try connectToServer()
+        defer { close(fd) }
+        try sendAll(fd, encode(.show) + "garbage-after-command")
+        let exchange = try readToEOF(fd)
+
+        let response = try XCTUnwrap(
+            decode(response: exchange.response),
+            "мусор после команды не должен мешать ответу на саму команду"
+        )
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+
+        let followUp = try performExchange(encode(.show))
+        XCTAssertNotNil(
+            decode(response: followUp.response),
+            "после клиента с мусором сервер должен обслужить следующего"
+        )
+    }
+
     // MARK: - перезапуск поверх протухшего сокет-файла
 
     func testServerSurvivesStaleSocketFileLeftByDeadDaemon() async throws {

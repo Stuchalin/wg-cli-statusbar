@@ -30,13 +30,15 @@ public struct WGBinaryResolver {
     }
 
     /// Первый существующий путь поиска, `nil` — wg не найден. Кэшируется
-    /// **только успешный** резолв: промах перепроверяется на каждом вызове,
-    /// чтобы `brew install wireguard-tools` подхватился без перезапуска демона
-    /// (три stat-а раз в несколько секунд — бесплатно).
+    /// **только успешный** резолв, но перед возвратом из кэша путь
+    /// перепроверяется: и `brew install` (промах не кэшируется), и
+    /// `brew uninstall` (кэш протух) подхватываются без перезапуска демона
+    /// (пара stat-ов раз в несколько секунд — бесплатно).
     public mutating func resolve() -> String? {
-        if let cachedPath {
+        if let cachedPath, fileExists(cachedPath) {
             return cachedPath
         }
+        cachedPath = nil
         let hit = searchPaths.first { fileExists($0) }
         cachedPath = hit
         return hit

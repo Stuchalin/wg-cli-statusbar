@@ -46,6 +46,7 @@ Security notes:
 
 - Private and preshared keys are sanitized inside the daemon — the only place raw output exists — and replaced with `(none)` on the wire; the app process never sees a secret.
 - The install path runs a root shell script that lives in the user-writable app bundle. Between the prompt and the copy there is a TOCTOU window that is **deliberately not closed** with checksums — an accepted risk for an open-source tool with a technical audience. The proper fix is Developer ID signing + `SMAppService`, which is future distribution work; the daemon protocol is designed so that migration is a transport change.
+- The daemon runs `wg` as root, and Homebrew directories (`/opt/homebrew`, `/usr/local`) are user-writable: local code running as the installing user can replace `wg` and get it executed by the root daemon on the next tick. Same accepted-risk family as the TOCTOU above (local user → root); the real fix is copying `wg` to a root-owned location at install time, deferred alongside the `SMAppService` migration.
 
 Dev fallback: `sudo .build/debug/WGStatusBar` still works without the daemon (direct process runner, picked automatically when the socket file is absent). The menu's service item only works from the .app bundle — the install scripts ship inside it, so a bare dev binary reports a missing install script; install manually instead:
 

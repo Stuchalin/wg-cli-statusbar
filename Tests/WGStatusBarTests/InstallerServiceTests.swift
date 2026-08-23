@@ -66,11 +66,20 @@ final class InstallerServiceTests: XCTestCase {
 
     func testInterpretUserCanceledPromptIsSilentCancel() {
         // Отмена промпта пароль/Touch ID: osascript завершается ненулевым
-        // кодом со «User canceled» в stderr — это тихий no-op, не ошибка.
+        // кодом с локализованным текстом ошибки -128 в stderr — это тихий
+        // no-op, не ошибка. Детект — по номеру «(-128)»: текст зависит от
+        // языка системы (en/ru — реальный рендеринг osascript на обеих).
         XCTAssertEqual(
             InstallerService.interpret(
                 exitCode: 1,
                 stderr: "35:104: execution error: User canceled. (-128)\n"
+            ),
+            .cancelled
+        )
+        XCTAssertEqual(
+            InstallerService.interpret(
+                exitCode: 1,
+                stderr: "0:17: execution error: Отменено пользователем. (-128)\n"
             ),
             .cancelled
         )

@@ -284,10 +284,12 @@ public final class DaemonServer {
         }
     }
 
-    /// Ждёт EOF клиентского сокета (poll + `MSG_PEEK`: команда уже прочитана,
-    /// читаемость после этого — EOF либо лишние данные) и отменяет работу.
-    /// Выходит по EOF, ошибке наблюдения или флагу `stop`. poll/recv блокируют
-    /// поток — вызывается только из detached-задачи.
+    /// Ждёт EOF клиентского сокета (poll + recv по байту: команда уже прочитана,
+    /// любые данные после неё протоколу не нужны) и отменяет работу. Байты
+    /// поглощаются, а не подсматриваются (`MSG_PEEK`): иначе клиент с мусором
+    /// после команды держал бы сокет бесконечно читаемым — busy-loop без паузы
+    /// до конца работы wg. Выходит по EOF, ошибке наблюдения или флагу `stop`.
+    /// poll/recv блокируют поток — вызывается только из detached-задачи.
     private static func cancelWorkOnClientEOF(
         fd: Int32,
         work: Task<String, Error>,
@@ -302,15 +304,15 @@ public final class DaemonServer {
                 return  // ошибка наблюдения — работу не трогаем
             }
             var probe: UInt8 = 0
-            let peeked = recv(fd, &probe, 1, MSG_PEEK)
-            if peeked == 0 {
+            let received = recv(fd, &probe, 1, 0)
+            if received == 0 {
                 work.cancel()  // EOF: клиент ушёл до ответа
                 return
             }
-            if peeked < 0 && errno != EINTR {
+            if received < 0 && errno != EINTR {
                 return
             }
-            // peeked > 0: лишние данные от клиента — не EOF, ждём дальше.
+            // received > 0: лишние данные от клиента — поглощены, ждём дальше.
         }
     }
 

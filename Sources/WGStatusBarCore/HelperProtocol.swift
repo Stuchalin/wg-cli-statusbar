@@ -8,7 +8,7 @@ public let helperProtocolVersion = 1
 /// Монотонный номер билда демона: бампируется с каждым релизом хелпера
 /// (release-чеклист). Приложение сравнивает его с ответом демона — устаревший
 /// бинарь предлагается обновить пунктом «Обновить сервис».
-public let helperBuildNumber = 2
+public let helperBuildNumber = 3
 
 /// Запрос приложения к демону (line-based: соединение = один запрос).
 public enum HelperRequest {

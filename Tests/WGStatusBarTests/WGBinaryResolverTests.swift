@@ -70,9 +70,28 @@ final class WGBinaryResolverTests: XCTestCase {
         XCTAssertEqual(resolver.resolve(), "/opt/homebrew/bin/wg")
         XCTAssertEqual(fs.probeCount, 1)
 
-        // Повторный вызов — из кэша, без обращений к FS.
+        // Повторный вызов — кэш с перепроверкой существования: один stat
+        // закэшированного пути, не полный обход всех кандидатов.
         XCTAssertEqual(resolver.resolve(), "/opt/homebrew/bin/wg")
-        XCTAssertEqual(fs.probeCount, 1, "успешный резолв кэшируется — FS не дёргается")
+        XCTAssertEqual(fs.probeCount, 2, "кэш перепроверяет только закэшированный путь")
+    }
+
+    func testResolveCachedHitIsInvalidatedWhenWgDisappears() {
+        // brew uninstall после успешного резолва: закэшированный путь мёртв —
+        // резолвер обязан увидеть удаление (daemon ответит wg-missing, а не
+        // вечный wg-failed от запуска несуществующего файла) и снова найти wg
+        // после переустановки — без перезапуска демона.
+        let fs = FakeFileSystem()
+        fs.existingPaths = ["/opt/homebrew/bin/wg"]
+        var resolver = WGBinaryResolver(searchPaths: searchPaths, fileExists: fs.fileExists)
+
+        XCTAssertEqual(resolver.resolve(), "/opt/homebrew/bin/wg")
+
+        fs.existingPaths = []
+        XCTAssertNil(resolver.resolve(), "удалённый wg — снова промах, а не мёртвый кэш")
+
+        fs.existingPaths = ["/opt/homebrew/bin/wg"]
+        XCTAssertEqual(resolver.resolve(), "/opt/homebrew/bin/wg")
     }
 
     func testResolveMissIsNotCached() {
@@ -92,8 +111,9 @@ final class WGBinaryResolverTests: XCTestCase {
         XCTAssertEqual(resolver.resolve(), "/opt/homebrew/bin/wg")
         XCTAssertEqual(fs.probeCount, 7)
 
-        // Найденный путь теперь кэшируется — как в тесте hit-кэша.
+        // Найденный путь теперь кэшируется — как в тесте hit-кэша:
+        // один stat перепроверки, не обход всех кандидатов.
         XCTAssertEqual(resolver.resolve(), "/opt/homebrew/bin/wg")
-        XCTAssertEqual(fs.probeCount, 7)
+        XCTAssertEqual(fs.probeCount, 8)
     }
 }
