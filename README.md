@@ -19,7 +19,7 @@ The project is split into three targets:
   - Endpoint, traffic (`↓ N KiB  ↑ N KiB`), and "N ago" handshake age.
   - Routing: "all traffic" badge when allowed ips include `0.0.0.0/0` or `::/0`, otherwise the subnet list.
   - Shortened peer public key (head…tail), shown only when an interface has more than one peer.
-  - ⓘ toggle with a color legend.
+  - ⓘ toggle with a color legend; the expanded/collapsed state persists across menu reopenings.
   - Stale-data handling: when no refresh succeeds for more than 10 s, the last snapshot is not cleared — it stays in the card dimmed with a "Data is stale" marker above it (the current refresh error shows in its usual place).
 - Native menu items with keyboard navigation: Refresh ⌘R, Open Configs ⌘O, Tunnel management (disabled placeholder), the daemon service item (Install / Update / Remove, depending on service state), Quit ⌘Q.
 - Auto-refresh every 5 seconds; Refresh also forces a re-scan of tunnel names.
