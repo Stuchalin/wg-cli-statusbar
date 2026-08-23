@@ -171,10 +171,10 @@ private func legendToggled(to visible: Bool) {
 
 ### Task 2: Verify acceptance criteria
 
-- [ ] критерии из Overview реализованы: async-замер (кнопка не исчезает, высота меняется один раз) + память легенды между переоткрытиями меню
-- [ ] полный сьют: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный
-- [ ] `swift build -c release` — зелёный
-- [ ] код-ревью диффа: подпись колбэков, weak-захваты (`[weak self] visible in …`, `[weak self] in self?…`), отсутствие лишних изменений
+- [x] критерии из Overview реализованы: async-замер (кнопка не исчезает, высота меняется один раз) + память легенды между переоткрытиями меню — подтверждено на уровне кода (`legendToggled` диспатчит замер через `DispatchQueue.main.async`, `isLegendVisible` хранится в контроллере и сеется в `makeCardItem`); runtime-поведение — ручной чеклист в Post-Completion
+- [x] полный сьют: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный (194 теста, 0 падений)
+- [x] `swift build -c release` — зелёный (Build complete!)
+- [x] код-ревью диффа: подпись колбэков, weak-захваты (`[weak self] visible in …`, `[weak self] in self?…`), отсутствие лишних изменений — подписи совпадают с планом, оба захвата weak, дифф кроме двух файлов трогает только план; `grep -rn onContentChange Sources/ Tests/` пусто, call site `StatusCardView(` единственный
 
 ### Task 3: [Final] Update documentation
 
