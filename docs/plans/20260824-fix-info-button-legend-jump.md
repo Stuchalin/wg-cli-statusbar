@@ -159,15 +159,15 @@ private func legendToggled(to visible: Bool) {
 - Modify: `Sources/WGStatusBarCore/StatusCardView.swift`
 - Modify: `Sources/WGStatusBarCore/StatusItemController.swift`
 
-- [ ] `StatusCardView`: заменить `onContentChange: () -> Void` на `onLegendChange: @escaping (Bool) -> Void` и добавить параметр `initialLegendVisible: Bool = false` в init; `_isLegendVisible = State(initialValue:)`
-- [ ] `StatusCardView`, кнопка ⓘ: `isLegendVisible.toggle(); onLegendChange(isLegendVisible)` (вместо `onContentChange()`)
-- [ ] `StatusItemController`: добавить `private var isLegendVisible = false` с комментарием о переживании пересборок меню
-- [ ] `StatusItemController.makeCardItem`: передать `initialLegendVisible: isLegendVisible` и колбэк `{ [weak self] visible in self?.legendToggled(to: visible) }`
-- [ ] `StatusItemController`: реализовать `legendToggled(to:)` — сохранить значение + `DispatchQueue.main.async { [weak self] in self?.resizeCardToContent() }` с тайминговым комментарием (синхронный замер видит старую высоту)
-- [ ] обновить док-комментарии: шапка `StatusCardView` (механика посева/репорта), комментарий `installCommandsSection` (строка 287, убрать упоминание `onContentChange`), комментарий `resizeCardToContent` (замер валиден только после рендера SwiftUI)
-- [ ] `swift build` — без ошибок
-- [ ] `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — сьют зелёный (тесты не меняются)
-- [ ] убедиться, что упоминаний `onContentChange` в коде не осталось: `grep -rn onContentChange Sources/ Tests/` — пусто
+- [x] `StatusCardView`: заменить `onContentChange: () -> Void` на `onLegendChange: @escaping (Bool) -> Void` и добавить параметр `initialLegendVisible: Bool = false` в init; `_isLegendVisible = State(initialValue:)`
+- [x] `StatusCardView`, кнопка ⓘ: `isLegendVisible.toggle(); onLegendChange(isLegendVisible)` (вместо `onContentChange()`)
+- [x] `StatusItemController`: добавить `private var isLegendVisible = false` с комментарием о переживании пересборок меню
+- [x] `StatusItemController.makeCardItem`: передать `initialLegendVisible: isLegendVisible` и колбэк `{ [weak self] visible in self?.legendToggled(to: visible) }`
+- [x] `StatusItemController`: реализовать `legendToggled(to:)` — сохранить значение + `DispatchQueue.main.async { [weak self] in self?.resizeCardToContent() }` с тайминговым комментарием (синхронный замер видит старую высоту)
+- [x] обновить док-комментарии: шапка `StatusCardView` (механика посева/репорта), комментарий `installCommandsSection` (строка 287, убрать упоминание `onContentChange`), комментарий `resizeCardToContent` (замер валиден только после рендера SwiftUI)
+- [x] `swift build` — без ошибок
+- [x] `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — сьют зелёный (тесты не меняются)
+- [x] убедиться, что упоминаний `onContentChange` в коде не осталось: `grep -rn onContentChange Sources/ Tests/` — пусто
 
 ### Task 2: Verify acceptance criteria
 

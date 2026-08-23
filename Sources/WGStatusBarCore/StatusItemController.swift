@@ -152,6 +152,9 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     private weak var menu: NSMenu?
     /// Хостинг-вью карточки последней сборки — для перемера высоты (ⓘ-легенда).
     private var cardHostingView: NSHostingView<StatusCardView>?
+    /// Видимость легенды (ⓘ): хранится здесь, чтобы переживать пересборки меню
+    /// (`menuNeedsUpdate` создаёт новый `NSHostingView` — `@State` вью сбрасывается).
+    private var isLegendVisible = false
 
     public init(model: WireGuardStatusModel, installer: ServiceInstalling) {
         self.model = model
@@ -253,8 +256,11 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     private func makeCardItem() -> NSMenuItem {
-        let cardView = StatusCardView(model: model) { [weak self] in
-            self?.resizeCardToContent()
+        let cardView = StatusCardView(
+            model: model,
+            initialLegendVisible: isLegendVisible
+        ) { [weak self] visible in
+            self?.legendToggled(to: visible)
         }
         let hostingView = NSHostingView(rootView: cardView)
         // NSMenu берёт размер пункта из frame view'а — мерим содержимое и фиксируем frame
@@ -280,7 +286,19 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         return item
     }
 
+    /// Переключение легенды (ⓘ): запоминаем видимость и перемеряем карточку.
+    private func legendToggled(to visible: Bool) {
+        isLegendVisible = visible
+        // SwiftUI коммитит рендер после текущего стека вызовов: синхронный замер
+        // видел бы старую высоту (ⓘ исчезала до следующего тика) — мерим на
+        // следующем проходе run loop, когда контент уже перестроен.
+        DispatchQueue.main.async { [weak self] in self?.resizeCardToContent() }
+    }
+
     /// Карточка изменила высоту (ⓘ-легенда, ошибка) — перемеряем и обновляем frame.
+    /// Замер `fittingSize` валиден только после рендера SwiftUI: путь модели
+    /// (`modelDidChange`) уже доставляется асинхронно (`receive(on:)`),
+    /// переключение легенды диспатчится в `legendToggled`.
     /// Работает и по открытому меню: пункты берут размер из frame view'а.
     private func resizeCardToContent() {
         guard let hostingView = cardHostingView else { return }

@@ -140,17 +140,24 @@ public struct StatusCardViewModel: Equatable {
 
 /// Карточка статуса для первого пункта NSMenu (Task 7 вставит её в `NSHostingView`).
 ///
-/// `onContentChange` вызывается, когда содержимое меняет высоту (ⓘ-легенда) —
-/// владелец по колбэку перемеряет и обновляет frame пункта-карточки
-/// (`resizeCardToContent`), само меню не пересобирается.
+/// Видимость легенды (ⓘ) живёт в `@State` и сеется из `initialLegendVisible`:
+/// `menuNeedsUpdate` пересобирает меню и создаёт новую вью — так состояние
+/// переживает переоткрытие меню. `onLegendChange` репортит новое значение в
+/// момент переключения: владелец сохраняет его и перемеряет frame
+/// пункта-карточки (`resizeCardToContent`), само меню не пересобирается.
 public struct StatusCardView: View {
     @ObservedObject private var model: WireGuardStatusModel
-    private let onContentChange: () -> Void
-    @State private var isLegendVisible = false
+    private let onLegendChange: (Bool) -> Void
+    @State private var isLegendVisible: Bool
 
-    public init(model: WireGuardStatusModel, onContentChange: @escaping () -> Void = {}) {
+    public init(
+        model: WireGuardStatusModel,
+        initialLegendVisible: Bool = false,
+        onLegendChange: @escaping (Bool) -> Void = { _ in }
+    ) {
         self.model = model
-        self.onContentChange = onContentChange
+        _isLegendVisible = State(initialValue: initialLegendVisible)
+        self.onLegendChange = onLegendChange
     }
 
     public var body: some View {
@@ -170,7 +177,7 @@ public struct StatusCardView: View {
                 }
                 Button {
                     isLegendVisible.toggle()
-                    onContentChange()
+                    onLegendChange(isLegendVisible)
                 } label: {
                     Image(systemName: "info.circle")
                 }
@@ -284,8 +291,8 @@ public struct StatusCardView: View {
     }
 
     /// Блок команд установки CLI (`wgMissing`): моноширинные строки, клик —
-    /// копирование в pasteboard. Высота блока постоянна — `onContentChange`
-    /// не нужен.
+    /// копирование в pasteboard. Высота блока постоянна — отчёт о смене
+    /// высоты карточки здесь не нужен.
     private func installCommandsSection(_ commands: [String]) -> some View {
         VStack(alignment: .leading, spacing: 4) {
             ForEach(commands, id: \.self) { command in
