@@ -276,8 +276,10 @@ public final class WireGuardStatusModel: ObservableObject {
         error as? StatusFailure ?? .generic(error.localizedDescription)
     }
 
+    /// Тайтл для VoiceOver: как и иконка, от `showsConnected` — устаревший
+    /// снапшот не озвучивается как «подключено».
     public var menuTitle: String {
-        isAnyConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
+        showsConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);

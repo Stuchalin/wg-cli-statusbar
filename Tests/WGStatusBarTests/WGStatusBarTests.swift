@@ -9,11 +9,6 @@ final class WGStatusBarTests: XCTestCase {
         Date(timeIntervalSinceNow: -60)
     }
 
-    /// Хендшейк 5 мин назад — стареющий (между порогами 2 и 10 мин), с запасом от границ.
-    func makeAgingHandshake() -> Date {
-        Date(timeIntervalSinceNow: -5 * 60)
-    }
-
     /// Хендшейк 15 мин назад — несвежий (порог orange 10 мин), с запасом от границы.
     func makeStaleHandshake() -> Date {
         Date(timeIntervalSinceNow: -15 * 60)
@@ -181,8 +176,24 @@ final class WGStatusBarTests: XCTestCase {
 
     // MARK: - Модель: menuTitle и isAnyConnected
 
+    /// Модель после одного успешного тика с заданным дампом: `lastSuccessAt`
+    /// поставлен успехом, снапшот живой — тайтл «on» честен. Голая инъекция
+    /// `init(testing:)` для «on» больше не годится: без успешного тика данные
+    /// устаревшие (`lastSuccessAt == nil`) и тайтл был бы «off».
+    func makeRefreshedModel(dump: String) -> WireGuardStatusModel {
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [.success(dump)]),
+            tunnelNamer: MockTunnelNamer()
+        )
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+        return model
+    }
+
     func testMenuTitleWhenActiveAndInactive() {
-        let connectedModel = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeActivePeer("peer-a")])])
+        // Подключённый кейс — через успешный refresh (тайтл читает свежесть
+        // снапшота); «off»-кейсы честны при любом пути — не подключён.
+        let connectedModel = makeRefreshedModel(dump: makeConnectedDump(interfaceName: "wg0"))
         let disconnectedModel = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeNeverPeer("peer-b")])])
         let emptyModel = WireGuardStatusModel(testing: [])
 
@@ -195,20 +206,22 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(emptyModel.isAnyConnected)
     }
 
-    /// Aging-хендшейк (−5 мин) — всё ещё «подключён»: green|orange дают active.
+    /// Aging-хендшейк (−5 мин, с запасом от порога 10 мин) — всё ещё
+    /// «подключён»: green|orange дают active. Живой снапшот — через refresh.
     func testAgingHandshakeStillCountsAsConnected() {
-        let allAging = WireGuardStatusModel(
-            testing: [makeInterface("wg0", peers: [WGPeer(publicKey: "peer-a", latestHandshake: makeAgingHandshake())])]
-        )
+        let allAging = makeRefreshedModel(dump: makeDump([
+            makeInterfaceDumpLine("wg0"),
+            makePeerDumpLine(interfaceName: "wg0", handshakeSecondsAgo: 5 * 60),
+        ]))
 
         XCTAssertEqual(allAging.menuTitle, L10n.string("menu.title.on"))
 
-        let partlyAging = WireGuardStatusModel(
-            testing: [
-                makeInterface("wg0", peers: [WGPeer(publicKey: "peer-a", latestHandshake: makeAgingHandshake())]),
-                makeInterface("wg1", peers: [makeNeverPeer("peer-b")]),
-            ]
-        )
+        let partlyAging = makeRefreshedModel(dump: makeDump([
+            makeInterfaceDumpLine("wg0"),
+            makePeerDumpLine(interfaceName: "wg0", handshakeSecondsAgo: 5 * 60),
+            makeInterfaceDumpLine("wg1"),
+            makePeerDumpLine(interfaceName: "wg1", key: "peer-b-pub-key=", handshakeSecondsAgo: nil),
+        ]))
 
         XCTAssertEqual(partlyAging.menuTitle, L10n.string("menu.title.on"))
     }
@@ -522,6 +535,31 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertTrue(model.isDataStale, "данные без маркера успеха — устаревшие")
         XCTAssertTrue(model.isAnyConnected, "правда по данным остаётся подключённой")
         XCTAssertFalse(model.showsConnected, "непроверенный снапшот не кормит иконку")
+    }
+
+    /// Тайтл VoiceOver следует устарелости вместе с иконкой: живой снапшот
+    /// подключённого интерфейса — «on», замороженный за грейсом — «off».
+    func testMenuTitleFollowsSnapshotStaleness() {
+        let clock = FakeClock()
+        let model = makeClockModel(
+            clock: clock,
+            results: [
+                .success(makeConnectedDump(interfaceName: "utun3")),
+                .failure(StatusFailure.connectionRefused),
+            ]
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "успешный refresh должен завершиться")
+
+        XCTAssertEqual(model.menuTitle, L10n.string("menu.title.on"), "живые данные — «on»")
+
+        clock.current = clock.current.addingTimeInterval(11)
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "ошибочный refresh должен завершиться")
+
+        XCTAssertTrue(model.isAnyConnected, "предусловие: в данных интерфейс всё ещё подключён")
+        XCTAssertEqual(model.menuTitle, L10n.string("menu.title.off"), "устаревший снапшот гасит тайтл")
     }
 
     // MARK: - Модель: probe сокета и состояние сервиса

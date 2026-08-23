@@ -82,10 +82,10 @@
 - Modify: `Sources/WGStatusBarCore/StatusItemController.swift`
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 
-- [ ] тест: `menuTitle` при устаревших данных (успех → сдвиг часов за грейс → неудача) — «off»-тайтл; при живых данных — «on» (полный init + фейковые часы + stub-раннер)
-- [ ] переработать `testMenuTitleWhenActiveAndInactive` и `testAgingHandshakeStillCountsAsConnected` (WGStatusBarTests.swift:184–214): фикстуры с подключёнными интерфейсами прогнать через успешный refresh со stub-раннером — `lastSuccessAt` ставится успехом, ассерты «on» остаются зелёными; через `init(testing:)` они теперь честно устаревшие (`lastSuccessAt == nil`)
-- [ ] реализация: `updateStatusIcon()` → `StatusIcon.image(connected: model.showsConnected)`; `menuTitle` → от `showsConnected`; `isAnyConnected` не трогаем
-- [ ] `swift test` зелёный
+- [x] тест: `menuTitle` при устаревших данных (успех → сдвиг часов за грейс → неудача) — «off»-тайтл; при живых данных — «on» (полный init + фейковые часы + stub-раннер)
+- [x] переработать `testMenuTitleWhenActiveAndInactive` и `testAgingHandshakeStillCountsAsConnected` (WGStatusBarTests.swift:184–214): фикстуры с подключёнными интерфейсами прогнать через успешный refresh со stub-раннером — `lastSuccessAt` ставится успехом, ассерты «on» остаются зелёными; через `init(testing:)` они теперь честно устаревшие (`lastSuccessAt == nil`)
+- [x] реализация: `updateStatusIcon()` → `StatusIcon.image(connected: model.showsConnected)`; `menuTitle` → от `showsConnected`; `isAnyConnected` не трогаем
+- [x] `swift test` зелёный
 
 ### Task 3: Карточка — приглушение устаревших данных и пометка
 

@@ -188,10 +188,11 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         resizeCardToContent()
     }
 
-    /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg = Off,
-    /// детали — в карточке). Template-режим сам выбирает цвет под тему.
+    /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg или устаревший
+    /// снапшот = Off, детали — в карточке). Template-режим сам выбирает цвет
+    /// под тему.
     private func updateStatusIcon() {
-        statusItem.button?.image = StatusIcon.image(connected: model.isAnyConnected)
+        statusItem.button?.image = StatusIcon.image(connected: model.showsConnected)
         statusItem.button?.setAccessibilityLabel(model.menuTitle)
     }
 
