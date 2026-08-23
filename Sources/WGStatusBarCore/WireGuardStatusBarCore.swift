@@ -174,30 +174,66 @@ public final class WireGuardStatusModel: ObservableObject {
     @Published public private(set) var isLoading = false
     /// Типизированная ошибка последнего тика; живёт один refresh-цикл.
     @Published public private(set) var lastFailure: StatusFailure?
+    /// Состояние сервиса демона, выведено из фактов последнего тика
+    /// (сокет-файл + исход обмена) — не хранится, пересчитывается на каждом
+    /// refresh. Управляет пунктом меню установки/обновления/удаления сервиса.
+    @Published public private(set) var serviceState: ServiceState = .absent
 
     private let commandRunner: WGShowCommandRunning
     private let tunnelNamer: WireGuardTunnelNaming
+    /// Probe сокета демона на каждом refresh: файл есть → работаем через
+    /// демон, нет → фолбэк (продакшн — процессный раннер, dev/sudo).
+    private let socketExists: () -> Bool
+    private let socketPath: String
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 5
     /// Номер текущего refresh; завершения старых поколений отбрасываются.
     private var refreshGeneration = 0
 
-    public init() {
-        self.commandRunner = ProcessWGShowRunner()
-        self.tunnelNamer = WireGuardTunnelNamer()
+    public convenience init() {
+        self.init(
+            commandRunner: ProcessWGShowRunner(),
+            tunnelNamer: WireGuardTunnelNamer(),
+            socketExists: { FileManager.default.fileExists(atPath: helperSocketPath) },
+            socketPath: helperSocketPath
+        )
         refresh()
         startTimer()
     }
 
-    internal init(testing interfaces: [WGInterface]) {
-        self.commandRunner = ProcessWGShowRunner()
-        self.tunnelNamer = WireGuardTunnelNamer()
+    internal convenience init(testing interfaces: [WGInterface]) {
+        self.init(
+            commandRunner: ProcessWGShowRunner(),
+            tunnelNamer: WireGuardTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath
+        )
         self.interfaces = interfaces
     }
 
-    internal init(commandRunner: WGShowCommandRunning, tunnelNamer: WireGuardTunnelNaming) {
+    /// Перегрузка для существующих refresh-тестов: probe всегда false,
+    /// дефолтный путь — сокетный путь не активируется.
+    internal convenience init(commandRunner: WGShowCommandRunning, tunnelNamer: WireGuardTunnelNaming) {
+        self.init(
+            commandRunner: commandRunner,
+            tunnelNamer: tunnelNamer,
+            socketExists: { false },
+            socketPath: helperSocketPath
+        )
+    }
+
+    /// Полный init: свой probe сокета и путь — тесты состояния инжектируют
+    /// мутабельный флаг и tmp-сокет.
+    internal init(
+        commandRunner: WGShowCommandRunning,
+        tunnelNamer: WireGuardTunnelNaming,
+        socketExists: @escaping () -> Bool,
+        socketPath: String
+    ) {
         self.commandRunner = commandRunner
         self.tunnelNamer = tunnelNamer
+        self.socketExists = socketExists
+        self.socketPath = socketPath
     }
 
     deinit {
@@ -239,7 +275,14 @@ public final class WireGuardStatusModel: ObservableObject {
         isLoading = true
         lastFailure = nil
 
-        let runner = commandRunner
+        // Выбор раннера из фактов на каждом тике: сокет демона есть →
+        // SocketWGShowRunner; нет → инжектированный фолбэк (продакшн —
+        // ProcessWGShowRunner, dev-режим под sudo). Факт фиксируется до
+        // запуска — тем же фактом по завершении выводится состояние сервиса.
+        let socketPresent = socketExists()
+        let runner: WGShowCommandRunning = socketPresent
+            ? SocketWGShowRunner(socketPath: socketPath)
+            : commandRunner
         let namer = tunnelNamer
         Task.detached {
             do {
@@ -253,12 +296,15 @@ public final class WireGuardStatusModel: ObservableObject {
                     guard let self, generation == self.refreshGeneration else { return }
                     self.interfaces = parsed
                     self.isLoading = false
+                    self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))
                 }
             } catch {
+                let failure = Self.failure(from: error)
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
-                    self.lastFailure = Self.failure(from: error)
+                    self.lastFailure = failure
                     self.isLoading = false
+                    self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .failure(failure))
                 }
             }
         }

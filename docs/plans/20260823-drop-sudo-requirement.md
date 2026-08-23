@@ -289,11 +289,11 @@ final class InstallerService {
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 - Create: `Tests/WGStatusBarTests/ServiceStateTests.swift`
 
-- [ ] тест (таблично): вывод состояния из фактов — нет сокета → `absent`; коннект отклонён, таймаут при живом сокете, декод-провал или мгновенный EOF → `broken`; протокол не равен → `outdated`; build меньше (в т.ч. по `err`-ответу) → `outdated`; всё ок → `installed`; `wg-missing` не влияет на состояние сервиса
-- [ ] реализация: enum `ServiceState` + чистая функция вывода (входы — сокет-файл, исход коннекта, заголовок ответа)
-- [ ] реализация: инжектируемый probe сокета в модели; выбор раннера на каждом refresh: сокета нет → инжектированный `commandRunner` (в продакшне — `ProcessWGShowRunner`), сокет есть → `SocketWGShowRunner` с инжектируемым `socketPath` (дефолт `/var/run/wgstatusbar.sock`); `@Published serviceState`; внутренний init — `init(commandRunner:tunnelNamer:socketExists:socketPath:)`, существующий `init(commandRunner:tunnelNamer:)` остаётся перегрузкой (probe всегда false, дефолтный путь) — старые тесты не трогаются, тесты состояния инжектируют свой probe и tmp-сокет
-- [ ] тест: модель с моками — состояние публикуется и обновляется между тиками
-- [ ] `swift test` зелёный
+- [x] тест (таблично): вывод состояния из фактов — нет сокета → `absent`; коннект отклонён, таймаут при живом сокете, декод-провал или мгновенный EOF → `broken`; протокол не равен → `outdated`; build меньше (в т.ч. по `err`-ответу) → `outdated`; всё ок → `installed`; `wg-missing` не влияет на состояние сервиса
+- [x] реализация: enum `ServiceState` + чистая функция вывода (входы — сокет-файл, исход коннекта, заголовок ответа)
+- [x] реализация: инжектируемый probe сокета в модели; выбор раннера на каждом refresh: сокета нет → инжектированный `commandRunner` (в продакшне — `ProcessWGShowRunner`), сокет есть → `SocketWGShowRunner` с инжектируемым `socketPath` (дефолт `/var/run/wgstatusbar.sock`); `@Published serviceState`; внутренний init — `init(commandRunner:tunnelNamer:socketExists:socketPath:)`, существующий `init(commandRunner:tunnelNamer:)` остаётся перегрузкой (probe всегда false, дефолтный путь) — старые тесты не трогаются, тесты состояния инжектируют свой probe и tmp-сокет
+- [x] тест: модель с моками — состояние публикуется и обновляется между тиками
+- [x] `swift test` зелёный
 
 ### Task 9: Карточка — wg-missing с командами установки
 

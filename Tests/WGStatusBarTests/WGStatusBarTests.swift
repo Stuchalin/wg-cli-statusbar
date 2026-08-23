@@ -402,6 +402,30 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(model.lastError, L10n.string("error.daemon_outdated"))
     }
 
+    // MARK: - Модель: probe сокета и состояние сервиса
+
+    /// Легаси-перегрузка `init(commandRunner:tunnelNamer:)` держит probe сокета
+    /// всегда false — все существующие refresh-тесты идут через инжектированный
+    /// раннер, состояние сервиса остаётся absent (сокетного пути нет).
+    func testLegacyInitUsesInjectedRunnerAndStaysAbsent() {
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun3"),
+                    makePeerDumpLine(interfaceName: "utun3", handshakeSecondsAgo: 60),
+                ])),
+            ]),
+            tunnelNamer: MockTunnelNamer()
+        )
+
+        XCTAssertEqual(model.serviceState, .absent, "до первого тика состояние — absent")
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertEqual(model.interfaces[0].name, "utun3", "дамп приходит от инжектированного раннера")
+        XCTAssertEqual(model.serviceState, .absent, "без сокета состояние сервиса — absent")
+    }
+
     // MARK: - Гигиена ключей после удаления StatusMenuView
 
     /// Ключи, которые использовал только удалённый `StatusMenuView` (и ключи
