@@ -176,6 +176,14 @@ public final class WireGuardStatusModel: ObservableObject {
     private let socketPath: String
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 5
+    /// Срок жизни снапшота: данные последнего успешного тика старше лимита —
+    /// устаревшие (иконка гаснет, карточка приглушает). Больше refreshInterval,
+    /// чтобы одиночный сбой не мигал иконкой.
+    private let stalenessLimit: TimeInterval = 10
+    /// Часы, инжектятся тестами (сценарии «успех → сбой → успех» без ожидания).
+    private let now: () -> Date
+    /// Момент последнего успешного тика (из `now()`); nil — успеха ещё не было.
+    private var lastSuccessAt: Date?
     /// Номер текущего refresh; завершения старых поколений отбрасываются.
     private var refreshGeneration = 0
 
@@ -212,26 +220,45 @@ public final class WireGuardStatusModel: ObservableObject {
     }
 
     /// Полный init: свой probe сокета и путь — тесты состояния инжектируют
-    /// мутабельный флаг и tmp-сокет.
+    /// мутабельный флаг и tmp-сокет; часы — фейковые часы тестов устарелости.
     internal init(
         commandRunner: WGShowCommandRunning,
         tunnelNamer: WireGuardTunnelNaming,
         socketExists: @escaping () -> Bool,
-        socketPath: String
+        socketPath: String,
+        now: @escaping () -> Date = Date.init
     ) {
         self.commandRunner = commandRunner
         self.tunnelNamer = tunnelNamer
         self.socketExists = socketExists
         self.socketPath = socketPath
+        self.now = now
     }
 
     deinit {
         timer?.invalidate()
     }
 
-    /// Хотя бы один интерфейс подключён — состояние иконки меню-бара.
+    /// Хотя бы один интерфейс подключён — правда по данным, безотносительно
+    /// свежести снапшота.
     public var isAnyConnected: Bool {
         interfaces.contains(where: \.isConnected)
+    }
+
+    /// Данные устарели: снапшот непуст и последнему успешному тику прошло
+    /// больше `stalenessLimit` (или успешных тиков не было — в продакшене
+    /// недостижимо, `interfaces` пишет только успешный тик). Пустые данные —
+    /// не устаревшие (нечему).
+    public var isDataStale: Bool {
+        guard !interfaces.isEmpty else { return false }
+        guard let lastSuccessAt else { return true }
+        return now().timeIntervalSince(lastSuccessAt) > stalenessLimit
+    }
+
+    /// Состояние иконки/VoiceOver: подключён И данные не устарели — замороженный
+    /// снапшот при потере источника не должен показывать «живой» щиток.
+    public var showsConnected: Bool {
+        isAnyConnected && !isDataStale
     }
 
     /// Строка ошибки для карточки, вычисляется из `lastFailure`; тип `String?`
@@ -249,8 +276,10 @@ public final class WireGuardStatusModel: ObservableObject {
         error as? StatusFailure ?? .generic(error.localizedDescription)
     }
 
+    /// Тайтл для VoiceOver: как и иконка, от `showsConnected` — устаревший
+    /// снапшот не озвучивается как «подключено».
     public var menuTitle: String {
-        isAnyConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
+        showsConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);
@@ -284,6 +313,7 @@ public final class WireGuardStatusModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
                     self.interfaces = parsed
+                    self.lastSuccessAt = self.now()
                     self.isLoading = false
                     self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))
                 }
