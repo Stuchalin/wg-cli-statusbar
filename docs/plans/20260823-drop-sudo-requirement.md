@@ -218,10 +218,10 @@ final class InstallerService {
 - Create: `Sources/WGStatusBarCore/WGBinaryResolver.swift`
 - Create: `Tests/WGStatusBarTests/WGBinaryResolverTests.swift`
 
-- [ ] тест: первый существующий из `/opt/homebrew/bin/wg`, `/usr/local/bin/wg`, `/usr/bin/wg` (инжектированная FS)
-- [ ] тест: успешный резолв кэшируется (повторный вызов — без обращений к FS); промах НЕ кэшируется — каждый вызов перепроверяет (иначе wg-missing — тупик до перезагрузки демона)
-- [ ] реализация: резолвер с инжектируемой проверкой существования; кэш — только hit
-- [ ] `swift test` зелёный
+- [x] тест: первый существующий из `/opt/homebrew/bin/wg`, `/usr/local/bin/wg`, `/usr/bin/wg` (инжектированная FS)
+- [x] тест: успешный резолв кэшируется (повторный вызов — без обращений к FS); промах НЕ кэшируется — каждый вызов перепроверяет (иначе wg-missing — тупик до перезагрузки демона)
+- [x] реализация: резолвер с инжектируемой проверкой существования; кэш — только hit
+- [x] `swift test` зелёный
 
 ### Task 4: Сервер демона в Core (accept-loop)
 
