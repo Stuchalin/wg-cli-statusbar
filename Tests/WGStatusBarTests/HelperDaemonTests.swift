@@ -287,7 +287,7 @@ final class HelperDaemonTests: XCTestCase {
         let executor = StubExecutor()
         try await startServer(executor: executor)
 
-        for (index, dump) in ["dump-one", "dump-two"].enumerated() {
+        for (index, dump) in ["dump-one\n", "dump-two\n"].enumerated() {
             executor.configure(dump: dump)
             let exchange = try performExchange(encode(.show))
             let response = try XCTUnwrap(decode(response: exchange.response))
@@ -300,7 +300,7 @@ final class HelperDaemonTests: XCTestCase {
         let executor = StubExecutor()
         // Задержка: клиент закрывается раньше, чем сервер отвечает — работа
         // отменяется по EOF, цикл не ждёт конца задержки.
-        executor.configure(dump: "dump", delay: 0.15)
+        executor.configure(dump: "dump\n", delay: 0.15)
         try await startServer(executor: executor)
 
         try connectSendAndClose(encode(.show))
@@ -311,7 +311,7 @@ final class HelperDaemonTests: XCTestCase {
             decode(response: exchange.response),
             "после отключившегося клиента сервер должен обслужить следующего"
         )
-        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
         XCTAssertEqual(executor.callCount, 1, "отменённый вызов не считается завершившимся, второй — доходит до конца")
     }
 
@@ -320,7 +320,7 @@ final class HelperDaemonTests: XCTestCase {
         // ребёнка. Длинная работа (30 с) отменяется по закрытию клиента —
         // следующий клиент обслуживается задолго до её конца.
         let executor = StubExecutor()
-        executor.configure(dump: "dump", delay: 30)
+        executor.configure(dump: "dump\n", delay: 30)
         try await startServer(executor: executor)
 
         try connectSendAndClose(encode(.show))
@@ -328,14 +328,14 @@ final class HelperDaemonTests: XCTestCase {
         // конфиг действует на следующие вызовы, текущий продолжает спать,
         // пока EOF-отмена его не разбудит.
         try await waitFor { executor.startCount == 1 }
-        executor.configure(dump: "dump")
+        executor.configure(dump: "dump\n")
 
         let exchange = try performExchange(encode(.show), readTimeout: 5)
         let response = try XCTUnwrap(
             decode(response: exchange.response),
             "сервер обязан обслужить следующего клиента не дожидаясь 30-секундной работы"
         )
-        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
         XCTAssertLessThan(
             exchange.elapsed,
             10,
@@ -346,7 +346,7 @@ final class HelperDaemonTests: XCTestCase {
 
     func testSilentClientIsClosedByReadDeadlineAndLoopSurvives() async throws {
         let executor = StubExecutor()
-        executor.configure(dump: "dump")
+        executor.configure(dump: "dump\n")
         try await startServer(executor: executor, readDeadline: 0.2)
 
         let exchange = try performExchange(nil)
@@ -364,7 +364,7 @@ final class HelperDaemonTests: XCTestCase {
             decode(response: followUp.response),
             "после молчащего клиента сервер должен обслужить следующего"
         )
-        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
     }
 
     func testExtraDataAfterCommandDoesNotDisturbResponse() async throws {
@@ -374,7 +374,7 @@ final class HelperDaemonTests: XCTestCase {
         let executor = StubExecutor()
         // Задержка: мусор гарантированно попадает в сокет, пока работает
         // исполнитель и живёт наблюдатель.
-        executor.configure(dump: "dump", delay: 0.1)
+        executor.configure(dump: "dump\n", delay: 0.1)
         try await startServer(executor: executor)
 
         let fd = try connectToServer()
@@ -386,7 +386,7 @@ final class HelperDaemonTests: XCTestCase {
             decode(response: exchange.response),
             "мусор после команды не должен мешать ответу на саму команду"
         )
-        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
 
         let followUp = try performExchange(encode(.show))
         XCTAssertNotNil(
@@ -403,7 +403,7 @@ final class HelperDaemonTests: XCTestCase {
         try makeStaleSocketFile()
 
         let executor = StubExecutor()
-        executor.configure(dump: "dump")
+        executor.configure(dump: "dump\n")
         try await startServer(executor: executor)
 
         let exchange = try performExchange(encode(.show))
@@ -411,14 +411,14 @@ final class HelperDaemonTests: XCTestCase {
             decode(response: exchange.response),
             "протухший сокет-файл не должен мешать bind нового демона"
         )
-        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
     }
 
     // MARK: - мусор без перевода строки сверх лимита
 
     func testOverlongRequestWithoutNewlineIsDroppedAndLoopSurvives() async throws {
         let executor = StubExecutor()
-        executor.configure(dump: "dump")
+        executor.configure(dump: "dump\n")
         try await startServer(executor: executor)
 
         // 2 КБ без `\n` — превышение лимита длины запроса: соединение
@@ -433,7 +433,7 @@ final class HelperDaemonTests: XCTestCase {
             decode(response: followUp.response),
             "после сверхдлинного мусорного запроса сервер должен обслужить следующего"
         )
-        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump"))
+        XCTAssertEqual(response, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
         XCTAssertEqual(executor.callCount, 1)
     }
 }

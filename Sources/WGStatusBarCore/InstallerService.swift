@@ -39,6 +39,12 @@ public final class InstallerService {
     /// сам запуск с системным промптом не автоматизируется (Testing Strategy).
     private let runOsa: ([String]) -> InstallResult
 
+    /// Уже идёт запуск (висит промпт или работает скрипт): пункт меню не
+    /// блокируется на время операции, повторный клик обязан быть no-op.
+    /// Доступ под локом: install()/uninstall() — async, вызовы конкурируют.
+    private let runningLock = NSLock()
+    private var isRunning = false
+
     public convenience init() {
         self.init(bundle: .main)
     }
@@ -140,6 +146,13 @@ public final class InstallerService {
     }
 
     private func run(scriptPath: String?, binaryPath: String?) async {
+        // Повторный вызов, пока идёт первый (промпт висит, osascript кэширует
+        // авторизацию ~5 минут и вторая копия стартует сразу) — тихий no-op:
+        // два параллельных install-скрипта конкурировали бы за cp в один dest
+        // и launchctl bootstrap, выдавая ложную ошибку при успехе.
+        guard beginRunClaim() else { return }
+        defer { endRunClaim() }
+
         let argv: [String]
         switch Self.command(scriptPath: scriptPath, binaryPath: binaryPath) {
         case .failure(let message):
@@ -164,6 +177,24 @@ public final class InstallerService {
                 onFailure?(message)
             }
         }
+    }
+
+    /// Захват права на запуск: true — вызов первый, false — уже идёт.
+    /// Синхронный метод-обёртка: `NSLock` из async-контекста запрещён
+    /// (Swift 6), критическая секция короткая и без await.
+    private func beginRunClaim() -> Bool {
+        runningLock.lock()
+        defer { runningLock.unlock() }
+        if isRunning { return false }
+        isRunning = true
+        return true
+    }
+
+    /// Освобождение права на запуск (defer в `run`).
+    private func endRunClaim() {
+        runningLock.lock()
+        defer { runningLock.unlock() }
+        isRunning = false
     }
 
     /// Синхронный запуск osascript; stdout скрипта не интересует, важны код

@@ -212,6 +212,47 @@ final class InstallerServiceTests: XCTestCase {
         }
     }
 
+    func testSecondCallWhileFirstInProgressIsSilentNoOp() async throws {
+        // Первый запуск «висит» (живой промпт имитируется блоком в
+        // инжектированном runOsa); повторный клик в это время — тихий no-op:
+        // osascript кэширует admin-авторизацию ~5 минут, и вторая копия
+        // скрипта стартовала бы параллельно первой (гонки cp в один dest и
+        // launchctl bootstrap → ложная ошибка при фактическом успехе).
+        let appURL = try makeFakeAppBundle(withScripts: true)
+        defer { try? FileManager.default.removeItem(at: appURL) }
+        let bundle = try XCTUnwrap(Bundle(url: appURL))
+
+        let runOsaStarted = DispatchSemaphore(value: 0)
+        let releasePrompt = DispatchSemaphore(value: 0)
+        let lock = NSLock()
+        var runCount = 0
+        let installer = InstallerService(bundle: bundle, runOsa: { _ in
+            lock.lock()
+            runCount += 1
+            lock.unlock()
+            runOsaStarted.signal()
+            releasePrompt.wait()
+            return .success
+        })
+
+        var successCount = 0
+        installer.onSuccess = { successCount += 1 }
+
+        let first = Task { await installer.install() }
+        XCTAssertEqual(
+            runOsaStarted.wait(timeout: .now() + 5), .success,
+            "первый запуск должен дойти до runOsa и взять флаг"
+        )
+
+        await installer.install()  // повторный клик — no-op, не ждёт первый
+
+        releasePrompt.signal()
+        await first.value
+
+        XCTAssertEqual(runCount, 1, "osascript запускается один раз")
+        XCTAssertEqual(successCount, 1, "успех репортится один раз")
+    }
+
     // MARK: - Фикстура фейкового .app
 
     /// Собирает в tmp структуру настоящего .app: Contents/Info.plist и, по

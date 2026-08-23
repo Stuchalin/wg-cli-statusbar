@@ -1,11 +1,13 @@
 import Foundation
 
 /// Пути поиска бинаря `wg` для демона: launchd не даёт пользовательский PATH
-/// (Homebrew живёт в `/opt/homebrew` или `/usr/local`), поэтому демон ищет wg
-/// сам. Порядок — как в шелле: arm64-Homebrew, x86-Homebrew, система.
+/// (Homebrew живёт в `/opt/homebrew` или `/usr/local`, MacPorts — в
+/// `/opt/local`), поэтому демон ищет wg сам. Порядок — как в шелле:
+/// arm64-Homebrew, x86-Homebrew, MacPorts, система.
 public let wgBinarySearchPaths = [
     "/opt/homebrew/bin/wg",
     "/usr/local/bin/wg",
+    "/opt/local/bin/wg",
     "/usr/bin/wg",
 ]
 

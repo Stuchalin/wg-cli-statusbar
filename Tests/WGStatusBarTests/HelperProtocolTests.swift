@@ -4,7 +4,7 @@ import XCTest
 final class HelperProtocolTests: XCTestCase {
     private static let dump =
         "wg0\tSECRETPRIVATEKEY\tpub-key-1\t0\t(none)\n" +
-        "wg0\tpub-key-1\tSECRETPSK\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff"
+        "wg0\tpub-key-1\tSECRETPSK\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff\n"
 
     // MARK: - decode: ok
 
@@ -30,21 +30,21 @@ final class HelperProtocolTests: XCTestCase {
 
     func testDecodeErrWgMissing() {
         XCTAssertEqual(
-            decode(response: "err 1 5 wg-missing"),
+            decode(response: "err 1 5 wg-missing\n"),
             .err(protocolVersion: 1, build: 5, code: .wgMissing, detail: nil)
         )
     }
 
     func testDecodeErrWgFailedWithDetail() {
         XCTAssertEqual(
-            decode(response: "err 1 5 wg-failed wg exited with status 3"),
+            decode(response: "err 1 5 wg-failed wg exited with status 3\n"),
             .err(protocolVersion: 1, build: 5, code: .wgFailed, detail: "wg exited with status 3")
         )
     }
 
     func testDecodeErrWgFailedWithoutDetail() {
         XCTAssertEqual(
-            decode(response: "err 3 9 wg-failed"),
+            decode(response: "err 3 9 wg-failed\n"),
             .err(protocolVersion: 3, build: 9, code: .wgFailed, detail: nil)
         )
     }
@@ -73,6 +73,28 @@ final class HelperProtocolTests: XCTestCase {
             XCTAssertNil(
                 decode(response: response),
                 "ожидался nil для ответа \(response.debugDescription)"
+            )
+        }
+    }
+
+    // MARK: - decode: усечённый ответ → nil
+
+    func testDecodeTruncatedResponseReturnsNil() {
+        // Клиент читает до EOF: обрыв записи демона — это «полный» ответ без
+        // терминатора заголовка либо с незавершённой последней строкой дампа.
+        // Принять его успехом — показать пустой/частичный статус как
+        // `installed`; правильный вердикт — битый ответ (broken, следующий
+        // тик переспросит).
+        let truncated = [
+            "ok 1 5", // заголовок без \n — не успех с пустым дампом
+            "err 1 5 wg-missing", // err без \n — тоже усечён
+            "ok 1 5\nwg0\t(no", // дамп оборван посреди строки
+            "ok 1 5\nline1\nline2", // дамп без финального перевода строки
+        ]
+        for response in truncated {
+            XCTAssertNil(
+                decode(response: response),
+                "ожидался nil для усечённого ответа \(response.debugDescription)"
             )
         }
     }

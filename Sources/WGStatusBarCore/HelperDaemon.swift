@@ -269,10 +269,18 @@ public final class DaemonServer {
     ) async throws -> String {
         let work = Task { try await work() }
         let workFinished = CancelFlag()
-        // Наблюдатель живёт своей жизнью: останавливается по EOF/ошибке либо
-        // по флагу после завершения работы (≤ одного poll-таймаута).
-        Task.detached {
-            Self.cancelWorkOnClientEOF(fd: fd, work: work, stop: workFinished)
+        // Наблюдателю — собственный дескриптор: клиентский fd закрывается
+        // сразу после ответа, а наблюдатель живёт ещё ≤ poll-таймаута, и
+        // poll/recv по переиспользованному номеру fd (accept уже отдал его
+        // следующему клиенту) украли бы байты его запроса. dup держит файл
+        // описания открытым, наблюдатель закрывает свою копию сам; не дался —
+        // работаем без отмены по EOF (деградация до дедлайна чтения, не крах).
+        let watcherFD = dup(fd)
+        if watcherFD >= 0 {
+            Task.detached {
+                defer { close(watcherFD) }
+                Self.cancelWorkOnClientEOF(fd: watcherFD, work: work, stop: workFinished)
+            }
         }
         return try await withTaskCancellationHandler {
             // Работа завершена — наблюдателю пора выходить (максимум один
@@ -289,7 +297,8 @@ public final class DaemonServer {
     /// поглощаются, а не подсматриваются (`MSG_PEEK`): иначе клиент с мусором
     /// после команды держал бы сокет бесконечно читаемым — busy-loop без паузы
     /// до конца работы wg. Выходит по EOF, ошибке наблюдения или флагу `stop`.
-    /// poll/recv блокируют поток — вызывается только из detached-задачи.
+    /// poll/recv блокируют поток — вызывается только из detached-задачи;
+    /// `fd` — собственная копия вызывающего (dup), закрывается снаружи.
     private static func cancelWorkOnClientEOF(
         fd: Int32,
         work: Task<String, Error>,

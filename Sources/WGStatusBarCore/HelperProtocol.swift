@@ -8,7 +8,7 @@ public let helperProtocolVersion = 1
 /// Монотонный номер билда демона: бампируется с каждым релизом хелпера
 /// (release-чеклист). Приложение сравнивает его с ответом демона — устаревший
 /// бинарь предлагается обновить пунктом «Обновить сервис».
-public let helperBuildNumber = 3
+public let helperBuildNumber = 4
 
 /// Запрос приложения к демону (line-based: соединение = один запрос).
 public enum HelperRequest {
@@ -40,12 +40,20 @@ public func encode(_ request: HelperRequest) -> String {
 /// (`ok <protocol> <build>` или `err <protocol> <build> <code> [деталь]`),
 /// всё после неё — dump (для `ok`). Текст не подошёл под формат → `nil`,
 /// вызывающий считает ответ битым.
+///
+/// Усечённые ответы отвергаются: клиент читает до EOF, поэтому обрыв записи
+/// (демон умер посреди send) выглядит как «полный» ответ без терминатора.
+/// Терминатор заголовка обязателен, а дамп — пустой или завершённый
+/// переводом строки (`wg` терминирует каждую строку) — иначе заголовок
+/// `ok` без `\n` превратился бы в успех с пустым дампом, незавершённая
+/// последняя строка — в успех с частичным.
 public func decode(response: String) -> HelperResponse? {
-    let headerEnd = response.firstIndex(of: "\n") ?? response.endIndex
+    guard let headerEnd = response.firstIndex(of: "\n") else { return nil }
     let header = String(response[..<headerEnd])
     let dump = headerEnd < response.endIndex
         ? String(response[response.index(after: headerEnd)...])
         : ""
+    if !dump.isEmpty && !dump.hasSuffix("\n") { return nil }
 
     // maxSplits 4: деталь `err` — остаток заголовка целиком, с пробелами.
     let tokens = header.split(
