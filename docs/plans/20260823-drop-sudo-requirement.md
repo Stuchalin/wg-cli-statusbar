@@ -353,12 +353,12 @@ final class InstallerService {
 
 Локально проверяемое (на рабочем Mac, wg есть):
 
-- [ ] секреты не покидают демон: тест Task 4 (маркеры в секретных полях не попадают в ответ) зелёный; в протоколе только `(none)`
-- [ ] все требования Overview реализованы; edge-кейсы секции «Обработка ошибок» покрыты тестами
-- [ ] состояния меню во всех четырёх состояниях сервиса проверены тестами
-- [ ] полный прогон: `swift test` (с `DEVELOPER_DIR`); покрытие не ниже текущего
-- [ ] `scripts/build-app.sh` собирается; в `Contents/MacOS/` есть `WGStatusBarHelper`, в `Contents/Resources/` — оба скрипта
-- [ ] dev-режим `sudo .build/debug/WGStatusBar` работает как раньше при отсутствующем демоне (сокета нет → процессный раннер; с установленным демоном dev-бинарь тоже пойдёт через сокет — ожидаемо)
+- [x] секреты не покидают демон: тест Task 4 (маркеры в секретных полях не попадают в ответ) зелёный; в протоколе только `(none)` — `testShowReturnsOkHeaderWithVersionsAndSanitizedDump` зелёный (изолированно и в полном прогоне)
+- [x] все требования Overview реализованы; edge-кейсы секции «Обработка ошибок» покрыты тестами — launchd `RunAtLoad`+`KeepAlive`, литеральные аргументы wg, exit 127, все 9 L10n-ключей в обоих lproj — сверено с кодом; edge-кейсы — HelperDaemonTests/ServiceStateTests/SocketWGShowRunnerTests/ProcessWGShowRunnerTests/InstallerServiceTests, все зелёные
+- [x] состояния меню во всех четырёх состояниях сервиса проверены тестами — `testMenuStructureServiceItemReflectsServiceState`: absent/broken/outdated/installed, позиция перед «Выход», отсутствие противоположного пункта
+- [x] полный прогон: `swift test` (с `DEVELOPER_DIR`) — 159 тестов, 0 падений; покрытие Core 69.77% (main до фичи — 60.42%, при +1235 строках кода) — не ниже базлайна
+- [x] `scripts/build-app.sh` собирается; в `Contents/MacOS/` есть `WGStatusBarHelper`, в `Contents/Resources/` — оба скрипта — проверено фактическим содержимым бандла
+- [x] dev-режим `sudo .build/debug/WGStatusBar` работает как раньше при отсутствующем демоне (сокета нет → процессный раннер; с установленным демоном dev-бинарь тоже пойдёт через сокет — ожидаемо) — выбор раннера по probe сокета покрыт тестами модели (тик без сокета → инжектированный раннер, появился → сокет-раннер); ручной GUI-запуск под sudo — Post-Completion (не автоматизируется)
 
 ### Task 14: [Final] Update documentation
 
