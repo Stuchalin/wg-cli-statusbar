@@ -194,11 +194,11 @@ final class InstallerService {
 - Create: `Sources/WGStatusBarCore/HelperProtocol.swift`
 - Create: `Tests/WGStatusBarTests/HelperProtocolTests.swift`
 
-- [ ] тест: декод `ok 1 5\n<dump>` → успех с `protocol`, `build`, dump-строками
-- [ ] тест: декод `err 1 5 wg-missing` и `err 1 5 wg-failed <detail>` → типизированные ошибки (с `protocol` и `build`)
-- [ ] тест: мусор/пустая строка → ошибка декодинга; encode round-trip
-- [ ] реализация: `helperProtocolVersion = 1`, `helperBuildNumber` (константы), enum запроса/ответа, encode/decode wire-формата
-- [ ] `swift test` зелёный
+- [x] тест: декод `ok 1 5\n<dump>` → успех с `protocol`, `build`, dump-строками
+- [x] тест: декод `err 1 5 wg-missing` и `err 1 5 wg-failed <detail>` → типизированные ошибки (с `protocol` и `build`)
+- [x] тест: мусор/пустая строка → ошибка декодинга; encode round-trip
+- [x] реализация: `helperProtocolVersion = 1`, `helperBuildNumber` (константы), enum запроса/ответа, encode/decode wire-формата
+- [x] `swift test` зелёный
 
 ### Task 2: Санизатор дампа
 
