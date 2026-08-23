@@ -68,12 +68,12 @@
 - Modify: `Sources/WGStatusBarCore/WireGuardStatusBarCore.swift`
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 
-- [ ] тест: успех тика (мок-раннер, фейковые часы) → `isDataStale == false`, `showsConnected == isAnyConnected`
-- [ ] тест: неудача в пределах грейса (успех → сдвиг часов на 5 c → неудача) → не устарело
-- [ ] тест: неудача за грейсом (успех → сдвиг на 11 c → неудача) → `isDataStale == true`, `showsConnected == false`, `interfaces` не очищены
-- [ ] тест: успех после устаревания → ожило (`isDataStale == false`); пустые `interfaces` → не устарело; `lastSuccessAt == nil` + данные (инъекция `init(testing:)`) → устарело
-- [ ] реализация: `now: () -> Date` в полном init (дефолт `Date.init`), `stalenessLimit = 10`, `lastSuccessAt` в success-ветке, вычисляемые `isDataStale`/`showsConnected`
-- [ ] `swift test` зелёный
+- [x] тест: успех тика (мок-раннер, фейковые часы) → `isDataStale == false`, `showsConnected == isAnyConnected`
+- [x] тест: неудача в пределах грейса (успех → сдвиг часов на 5 c → неудача) → не устарело
+- [x] тест: неудача за грейсом (успех → сдвиг на 11 c → неудача) → `isDataStale == true`, `showsConnected == false`, `interfaces` не очищены
+- [x] тест: успех после устаревания → ожило (`isDataStale == false`); пустые `interfaces` → не устарело; `lastSuccessAt == nil` + данные (инъекция `init(testing:)`) → устарело
+- [x] реализация: `now: () -> Date` в полном init (дефолт `Date.init`), `stalenessLimit = 10`, `lastSuccessAt` в success-ветке, вычисляемые `isDataStale`/`showsConnected`
+- [x] `swift test` зелёный
 
 ### Task 2: Иконка и VoiceOver — переход на showsConnected
 

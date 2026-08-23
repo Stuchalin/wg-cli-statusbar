@@ -402,6 +402,128 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(model.lastError, L10n.string("error.daemon_outdated"))
     }
 
+    // MARK: - Модель: грейс-устарелость снапшота
+
+    /// Модель с фейковыми часами (probe сокета всегда false — раннер инжектирован,
+    /// как в остальных refresh-тестах).
+    func makeClockModel(clock: FakeClock, results: [Result<String, Error>]) -> WireGuardStatusModel {
+        WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: results),
+            tunnelNamer: MockTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath,
+            now: { clock.current }
+        )
+    }
+
+    /// Дамп одного подключённого интерфейса (хендшейк 60 с назад — fresh).
+    func makeConnectedDump(interfaceName: String) -> String {
+        makeDump([
+            makeInterfaceDumpLine(interfaceName),
+            makePeerDumpLine(interfaceName: interfaceName, handshakeSecondsAgo: 60),
+        ])
+    }
+
+    /// Успешный тик ставит маркер успеха: данные свежие, иконка честная.
+    func testSuccessTickKeepsSnapshotFresh() {
+        let clock = FakeClock()
+        let model = makeClockModel(
+            clock: clock,
+            results: [.success(makeConnectedDump(interfaceName: "utun3"))]
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertFalse(model.isDataStale, "успешный тик — снапшот свежий")
+        XCTAssertEqual(model.showsConnected, model.isAnyConnected, "на живых данных showsConnected совпадает с isAnyConnected")
+        XCTAssertTrue(model.showsConnected, "fresh-хендшейк + свежий снапшот — подключён")
+    }
+
+    /// Неудача в пределах грейса (5 c < лимита 10 c) — мигания иконки нет.
+    func testFailureWithinGraceKeepsSnapshotFresh() {
+        let clock = FakeClock()
+        let model = makeClockModel(clock: clock, results: [
+            .success(makeConnectedDump(interfaceName: "utun3")),
+            .failure(StatusFailure.connectionRefused),
+        ])
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "успешный refresh должен завершиться")
+
+        clock.current = clock.current.addingTimeInterval(5)
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "ошибочный refresh должен завершиться")
+
+        XCTAssertFalse(model.isDataStale, "одиночный сбой в грейсе не устаревает данные")
+        XCTAssertTrue(model.showsConnected, "иконка не мигает на однократный сбой")
+        XCTAssertEqual(model.interfaces.count, 1, "данные последнего успеха остаются")
+    }
+
+    /// Неудача за грейсом (11 c > лимита 10 c) — снапшот устарел, иконка гаснет,
+    /// данные в модели не очищаются.
+    func testFailureBeyondGraceMarksSnapshotStale() {
+        let clock = FakeClock()
+        let model = makeClockModel(clock: clock, results: [
+            .success(makeConnectedDump(interfaceName: "utun3")),
+            .failure(StatusFailure.connectionRefused),
+        ])
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "успешный refresh должен завершиться")
+
+        clock.current = clock.current.addingTimeInterval(11)
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "ошибочный refresh должен завершиться")
+
+        XCTAssertTrue(model.isDataStale, "за грейсом снапшот устаревает")
+        XCTAssertFalse(model.showsConnected, "устаревший снапшот не кормит иконку")
+        XCTAssertTrue(model.isAnyConnected, "правда по данным остаётся подключённой")
+        XCTAssertEqual(model.interfaces.count, 1, "interfaces не очищаются")
+        XCTAssertEqual(model.interfaces[0].peers.count, 1, "пиры остаются на месте")
+    }
+
+    /// Успех после устаревания оживает снапшот на первом же тике.
+    func testSuccessAfterStalenessRevivesSnapshot() {
+        let clock = FakeClock()
+        let model = makeClockModel(clock: clock, results: [
+            .success(makeConnectedDump(interfaceName: "utun3")),
+            .failure(StatusFailure.connectionRefused),
+            .success(makeConnectedDump(interfaceName: "utun3")),
+        ])
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "успешный refresh должен завершиться")
+        clock.current = clock.current.addingTimeInterval(11)
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "ошибочный refresh должен завершиться")
+        XCTAssertTrue(model.isDataStale, "предусловие: снапшот устарел")
+
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastError == nil }, "восстанавливающий refresh должен завершиться")
+
+        XCTAssertFalse(model.isDataStale, "успешный тик снимает устарелость")
+        XCTAssertTrue(model.showsConnected, "иконка оживает на первом успешном тике")
+    }
+
+    /// Пустые `interfaces` — не устаревшие (нечему устаревать).
+    func testEmptyInterfacesAreNeverStale() {
+        let model = WireGuardStatusModel(testing: [])
+
+        XCTAssertFalse(model.isDataStale, "пустые данные не помечаются устаревшими")
+        XCTAssertFalse(model.showsConnected)
+    }
+
+    /// Данные, инъектированные минуя успешный тик (`lastSuccessAt == nil`),
+    /// считаются устаревшими: иконка их не показывает.
+    func testInjectedInterfacesWithoutSuccessAreStale() {
+        let model = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeActivePeer("peer-a")])])
+
+        XCTAssertTrue(model.isDataStale, "данные без маркера успеха — устаревшие")
+        XCTAssertTrue(model.isAnyConnected, "правда по данным остаётся подключённой")
+        XCTAssertFalse(model.showsConnected, "непроверенный снапшот не кормит иконку")
+    }
+
     // MARK: - Модель: probe сокета и состояние сервиса
 
     /// Легаси-перегрузка `init(commandRunner:tunnelNamer:)` держит probe сокета
@@ -464,6 +586,15 @@ final class WGStatusBarTests: XCTestCase {
                 XCTAssertEqual(raw, key, "мёртвый ключ \(key) должен быть удалён из \(language)")
             }
         }
+    }
+}
+
+/// Фейковые часы: мутабельное «сейчас», тесты устарелости сдвигают его без ожидания.
+final class FakeClock {
+    var current: Date
+
+    init(start: Date = Date()) {
+        current = start
     }
 }
 
