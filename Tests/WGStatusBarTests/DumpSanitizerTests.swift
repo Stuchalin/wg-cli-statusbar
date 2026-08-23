@@ -33,18 +33,13 @@ final class DumpSanitizerTests: XCTestCase {
 
     // MARK: - нетронутые входы (трекинг как у парсера)
 
-    func testSanitizePassesThroughUntouched() {
+    func testSanitizePassesThroughShortGarbageUntouched() {
         let untouched = [
             "", // пустой дамп
             "\n",
             "\n\n",
             "some garbage line",
             "a\tb\tc", // 3 поля
-            "wg0\tSECRET-PRIVATE-KEY\tpub-key-1\t51820\t(none)\tEXTRA", // 6 полей — не интерфейс
-            // 9-полевая строка ДО строки интерфейса — не пир, нетронутая.
-            "wg0\tpub-key-1\tSECRET-PSK\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff",
-            // 10 полей после интерфейса — мусор по формату, нетронутый.
-            "wg0\tpub-key-1\tSECRET-PSK\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff\tEXTRA",
         ]
         for dump in untouched {
             XCTAssertEqual(
@@ -52,6 +47,39 @@ final class DumpSanitizerTests: XCTestCase {
                 dump,
                 "ожидался вход нетронутым: \(dump.debugDescription)"
             )
+        }
+    }
+
+    /// Fail-closed: строка из 5+ полей нераспознанной формы — мусор это или
+    /// дрейф формата `wg` (добавленное поле после обновления wireguard-tools) —
+    /// не уносит секреты: позиция секрета неизвестна, вычищаются оба слота.
+    func testSanitizeScrubsSecretSlotsOfUnrecognizedLongLines() {
+        let cases: [(input: String, expected: String)] = [
+            // 6 полей — не интерфейс, но private key на слоте интерфейса.
+            (
+                "wg0\tSECRET-PRIVATE-KEY\tpub-key-1\t51820\t(none)\tEXTRA",
+                "wg0\t(none)\t(none)\t51820\t(none)\tEXTRA"
+            ),
+            // 9-полевая строка ДО строки интерфейса — не пир, psk на слоте пира.
+            (
+                "wg0\tpub-key-1\tSECRET-PSK\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff",
+                "wg0\t(none)\t(none)\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff"
+            ),
+            // 10 полей — мусор по формату (или дрейфнувший пир), psk на слоте пира.
+            (
+                "wg0\tpub-key-1\tSECRET-PSK\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff\tEXTRA",
+                "wg0\t(none)\t(none)\tendpoint.example:51820\t10.0.0.0/24\t0\t0\t0\toff\tEXTRA"
+            ),
+        ]
+        for testCase in cases {
+            let sanitized = sanitizeWGDump(testCase.input)
+            XCTAssertEqual(
+                sanitized,
+                testCase.expected,
+                "вход: \(testCase.input.debugDescription)"
+            )
+            XCTAssertFalse(sanitized.contains("SECRET"), "секреты не должны покидать санитайзер")
+            XCTAssertEqual(sanitizeWGDump(sanitized), sanitized, "санитизация идемпотентна")
         }
     }
 

@@ -8,8 +8,14 @@ import Foundation
 ///
 /// Трекинг строк повторяет `parseWGShowDump`: строка интерфейса — ровно 5
 /// полей (секрет — поле 2, private key), строка пира — ровно 9 полей и
-/// только после строки интерфейса (секрет — поле 3, preshared key). Мусор в
-/// начале дампа (в т.ч. 9-полевая строка до интерфейса) не переписывается.
+/// только после строки интерфейса (секрет — поле 3, preshared key).
+///
+/// Fail-closed: строка из 5+ полей нераспознанной формы (мусор или дрейф
+/// формата `wg` после обновления wireguard-tools — версии демона и wg
+/// независимы) не покидает санитайзер с секретами — позиция секрета в ней
+/// неизвестна, поэтому вычищаются оба слота (поля 2 и 3). Короткие строки
+/// (до 4 полей) носителями секретов в известных форматах не бывают и
+/// проходят как есть.
 public func sanitizeWGDump(_ dump: String) -> String {
     var sawInterfaceLine = false
     var sanitizedLines: [String] = []
@@ -22,8 +28,11 @@ public func sanitizeWGDump(_ dump: String) -> String {
             sawInterfaceLine = true
         } else if fields.count == 9, sawInterfaceLine {
             fields[2] = "(none)"
+        } else if fields.count >= 5 {
+            fields[1] = "(none)"
+            fields[2] = "(none)"
         }
-        // Прочее (мусорные строки, лишние поля, пир до интерфейса) — как есть.
+        // Строки до 4 полей (мусор) — как есть.
         sanitizedLines.append(fields.joined(separator: "\t"))
     }
 
