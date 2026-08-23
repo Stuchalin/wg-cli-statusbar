@@ -106,11 +106,11 @@
 **Files:**
 - Modify: `CLAUDE.md`
 
-- [ ] сценарий бага покрыт тестами: потеря источника (все тики падают) гасит иконку не позже грейса + тика; данные остаются в карточке приглушёнными
-- [ ] мигание на однократный сбой отсутствует (грейс-тест Task 1)
-- [ ] полный прогон: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`
-- [ ] CLAUDE.md (тексты там английские): «Data from the last successful tick stays visible» → данные остаются на грейс 10 c (`stalenessLimit`), дальше — приглушены в карточке и не кормят иконку (`showsConnected`); там же в Domain rules — «Menu-bar icon flips … Model exposes `isAnyConnected`» дополнить: иконка читает `showsConnected`, `isAnyConnected` остаётся правдой по данным
-- [ ] перенести план в `docs/plans/completed/`
+- [x] сценарий бага покрыт тестами: потеря источника (все тики падают) гасит иконку не позже грейса + тика; данные остаются в карточке приглушёнными (`testFailureBeyondGraceMarksSnapshotStale` + `testMenuTitleFollowsSnapshotStaleness` + `isStale`-тесты view-модели карточки)
+- [x] мигание на однократный сбой отсутствует (грейс-тест Task 1: `testFailureWithinGraceKeepsSnapshotFresh`)
+- [x] полный прогон: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — 192 теста, 0 падений
+- [x] CLAUDE.md (тексты там английские): «Data from the last successful tick stays visible» → данные остаются на грейс 10 c (`stalenessLimit`), дальше — приглушены в карточке и не кормят иконку (`showsConnected`); там же в Domain rules — «Menu-bar icon flips … Model exposes `isAnyConnected`» дополнить: иконка читает `showsConnected`, `isAnyConnected` остаётся правдой по данным
+- [x] перенести план в `docs/plans/completed/`
 
 ## Post-Completion
 

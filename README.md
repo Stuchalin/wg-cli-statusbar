@@ -12,7 +12,7 @@ The project is split into three targets:
 
 ## What it does
 
-- Menu-bar title `wg: on/off`: "on" when at least one interface has a recent peer handshake.
+- Menu-bar icon (with the VoiceOver title `wg: on/off`): "on" when at least one interface has a recent peer handshake **and** the data itself is fresh — a successful refresh within the last 10 s. If refreshes keep failing, the icon goes dark within ~10–15 s even when the last snapshot was connected.
 - Opening the menu shows a status card per interface:
   - Colored freshness dot: green (handshake ≤ 2 min), orange (2–10 min), secondary (> 10 min / never).
   - Human-readable tunnel name (`work-vpn`) with the raw interface name (`utun2`) below it.
@@ -20,6 +20,7 @@ The project is split into three targets:
   - Routing: "all traffic" badge when allowed ips include `0.0.0.0/0` or `::/0`, otherwise the subnet list.
   - Shortened peer public key (head…tail), shown only when an interface has more than one peer.
   - ⓘ toggle with a color legend.
+  - Stale-data handling: when no refresh succeeds for more than 10 s, the last snapshot is not cleared — it stays in the card dimmed with a "Data is stale" marker above it (the current refresh error shows in its usual place).
 - Native menu items with keyboard navigation: Refresh ⌘R, Open Configs ⌘O, Tunnel management (disabled placeholder), the daemon service item (Install / Update / Remove, depending on service state), Quit ⌘Q.
 - Auto-refresh every 5 seconds; Refresh also forces a re-scan of tunnel names.
 - Quick access to common WireGuard config folders.
@@ -29,6 +30,7 @@ The project is split into three targets:
 
 - Data source is the machine-readable `wg show all dump` (tab-separated): exact epoch handshake times and byte counters. Interface lines have 5 fields, peer lines 9; empty values are `(none)`. Secret fields (private key, preshared key) never reach the app at all: the daemon replaces them with `(none)` before sending anything over the socket, and raw output is never logged on either side.
 - Peer is active while its handshake is fresh or aging (green/orange); interface is connected when any peer is active.
+- A snapshot only counts while it is fresh: data from the last successful tick is trusted for 10 s, so one failed refresh does not flicker the icon. Past that the icon no longer shows "on" and the card dims the snapshot ("Data is stale") until a refresh succeeds again.
 - Tunnel names come from the wg-quick mechanism on macOS: `wg-quick up <config>` writes the actual interface name to `/var/run/wireguard/<config>.name`, validated by the adjacent `<utun>.sock`. Unknown interfaces fall back to the raw name (`utun2`).
 - Reading WireGuard state requires root; in normal use the app itself never runs as root — it talks to the privileged daemon (next section). The dev fallback below runs a bare binary under sudo.
 
@@ -125,7 +127,9 @@ Not automatable — run on a machine with WireGuard configured (the dev Mac work
 - Check whose name the privilege prompt shows (osascript vs the app) — a trust cosmetic.
 - Reboot: launchd starts the daemon on its own (`RunAtLoad`).
 - Outdated: build the app with a bumped `helperBuildNumber` — the menu shows "Update Service" and reinstall works.
-- "Remove Service": `/Library/LaunchDaemons/com.stuchalin.wgstatusbar.helper.plist`, `/Library/PrivilegedHelperTools/com.stuchalin.wgstatusbar.helper` and `/var/run/wgstatusbar.sock` are gone.
+- "Remove Service": `/Library/LaunchDaemons/com.stuchalin.wgstatusbar.helper.plist`, `/Library/PrivilegedHelperTools/com.stuchalin.wgstatusbar.helper` and `/var/run/wgstatusbar.sock` are gone; the icon goes dark within ~10–15 s and the card shows the refresh error above the dimmed "Data is stale" snapshot.
+- One failed refresh (e.g. the daemon restarting mid-tick) does not flicker the icon — the snapshot grace covers it.
+- Sleep/wake with a healthy daemon: the icon goes dark until the first successful tick after waking (~≤5 s) — accepted behavior, not a bug.
 - wg-missing recovery: hide `wg` (or its paths) — card shows install commands; restore it — the next tick picks it up (resolver misses are not cached).
 - PATH resolve: the daemon finds `wg` in the real `/opt/homebrew/bin`.
 - Display names: a regular user may not read `/var/run/wireguard/*.name` — names degrade to `utunN` (fallback exists); serving the mapping from the daemon is a future task.

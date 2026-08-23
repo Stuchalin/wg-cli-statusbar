@@ -177,13 +177,19 @@ final class WGStatusBarTests: XCTestCase {
     // MARK: - Модель: menuTitle и isAnyConnected
 
     /// Модель после одного успешного тика с заданным дампом: `lastSuccessAt`
-    /// поставлен успехом, снапшот живой — тайтл «on» честен. Голая инъекция
+    /// поставлен успехом, снапшот живой — тайтл «on» честен. Часы — фейковые
+    /// и замороженные: снапшот не устаревает, даже если прогон между refresh
+    /// и ассертом затянется (отладчик, пауза машины). Голая инъекция
     /// `init(testing:)` для «on» больше не годится: без успешного тика данные
     /// устаревшие (`lastSuccessAt == nil`) и тайтл был бы «off».
     func makeRefreshedModel(dump: String) -> WireGuardStatusModel {
+        let clock = FakeClock()
         let model = WireGuardStatusModel(
             commandRunner: StubCommandRunner(results: [.success(dump)]),
-            tunnelNamer: MockTunnelNamer()
+            tunnelNamer: MockTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath,
+            now: { clock.current }
         )
         model.refresh()
         waitUntil({ !model.isLoading }, "refresh должен завершиться")
@@ -560,6 +566,51 @@ final class WGStatusBarTests: XCTestCase {
 
         XCTAssertTrue(model.isAnyConnected, "предусловие: в данных интерфейс всё ещё подключён")
         XCTAssertEqual(model.menuTitle, L10n.string("menu.title.off"), "устаревший снапшот гасит тайтл")
+    }
+
+    /// Иконка бара питается тем же решением: контроллер читает свежесть
+    /// снапшота (`iconConnected` → `showsConnected`), а не только данные.
+    func testStatusIconFollowsSnapshotStaleness() {
+        let clock = FakeClock()
+        let model = makeClockModel(
+            clock: clock,
+            results: [
+                .success(makeConnectedDump(interfaceName: "utun3")),
+                .failure(StatusFailure.connectionRefused),
+            ]
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "успешный refresh должен завершиться")
+        XCTAssertTrue(StatusItemController.iconConnected(for: model), "живой снапшот — иконка «on»")
+
+        clock.current = clock.current.addingTimeInterval(11)
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "ошибочный refresh должен завершиться")
+
+        XCTAssertFalse(StatusItemController.iconConnected(for: model), "устаревший снапшот — иконка гаснет")
+    }
+
+    /// Граница грейса не включается: elapsed ровно `stalenessLimit` (10 c) —
+    /// данные ещё свежие (устарелость строго больше лимита).
+    func testGraceBoundaryIsExclusive() {
+        let clock = FakeClock()
+        let model = makeClockModel(
+            clock: clock,
+            results: [
+                .success(makeConnectedDump(interfaceName: "utun3")),
+                .failure(StatusFailure.connectionRefused),
+            ]
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading }, "успешный refresh должен завершиться")
+
+        clock.current = clock.current.addingTimeInterval(10)
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "ошибочный refresh должен завершиться")
+
+        XCTAssertFalse(model.isDataStale, "elapsed == лимита — ещё свежо, граница не включается")
     }
 
     // MARK: - Модель: probe сокета и состояние сервиса
