@@ -95,11 +95,11 @@
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 - Modify: `Tests/WGStatusBarTests/StatusCardViewModelTests.swift`
 
-- [ ] тест view-модели: `isStale` прокидывается в инициализацию и участвует в `Equatable` (дефолт `false` — существующие тесты не меняются)
-- [ ] реализация view-модели: поле `isStale` + параметр init
-- [ ] реализация вью: при `isStale` — строка `status.stale_data` (caption, secondary) над списком интерфейсов, блок интерфейсов в `.opacity(0.5)`; ошибка тика и команды установки — без изменений
-- [ ] L10n-ключ `status.stale_data` в обоих lproj (en + ru) + включить ключ в key-presence тест (`testCardKeysExistInBothLocalizations`)
-- [ ] `swift test` зелёный
+- [x] тест view-модели: `isStale` прокидывается в инициализацию и участвует в `Equatable` (дефолт `false` — существующие тесты не меняются)
+- [x] реализация view-модели: поле `isStale` + параметр init
+- [x] реализация вью: при `isStale` — строка `status.stale_data` (caption, secondary) над списком интерфейсов, блок интерфейсов в `.opacity(0.5)`; ошибка тика и команды установки — без изменений
+- [x] L10n-ключ `status.stale_data` в обоих lproj (en + ru) + включить ключ в key-presence тест (`testCardKeysExistInBothLocalizations`)
+- [x] `swift test` зелёный
 
 ### Task 4: Verify acceptance criteria и документация
 

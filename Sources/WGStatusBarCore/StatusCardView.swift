@@ -96,6 +96,9 @@ public struct StatusCardViewModel: Equatable {
 
     public let interfaces: [Interface]
     public let isLoading: Bool
+    /// Данные снапшота устарели (истёк грейс): карточка их не прячет, а
+    /// приглушает и помечает. Ошибка тика при этом показывается как обычно.
+    public let isStale: Bool
     /// Строка ошибки последнего тика — `failure?.localizedMessage`.
     public let errorMessage: String?
     /// Команды установки CLI при `.wgMissing` (блок под ошибкой, клик —
@@ -113,10 +116,12 @@ public struct StatusCardViewModel: Equatable {
         interfaces: [WGInterface],
         isLoading: Bool = false,
         failure: StatusFailure? = nil,
+        isStale: Bool = false,
         now: Date = Date()
     ) {
         self.interfaces = interfaces.map { Interface($0, now: now) }
         self.isLoading = isLoading
+        self.isStale = isStale
         self.errorMessage = failure?.localizedMessage
         self.installCommands = failure == .wgMissing ? Self.wgInstallCommands : []
     }
@@ -152,7 +157,8 @@ public struct StatusCardView: View {
         let card = StatusCardViewModel(
             interfaces: model.interfaces,
             isLoading: model.isLoading,
-            failure: model.lastFailure
+            failure: model.lastFailure,
+            isStale: model.isDataStale
         )
 
         VStack(alignment: .leading, spacing: 10) {
@@ -188,9 +194,12 @@ public struct StatusCardView: View {
                     .font(.caption)
                     .foregroundStyle(.secondary)
             } else {
-                ForEach(card.interfaces) { interface in
-                    interfaceSection(interface)
+                if card.isStale {
+                    Text(L10n.string("status.stale_data"))
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
                 }
+                interfacesSection(card)
             }
 
             if isLegendVisible {
@@ -199,6 +208,17 @@ public struct StatusCardView: View {
         }
         .padding(12)
         .frame(width: 320)
+    }
+
+    /// Блок интерфейсов карточки: при устаревших данных приглушается
+    /// (пометка «данные устарели» над ним остаётся читаемой).
+    private func interfacesSection(_ card: StatusCardViewModel) -> some View {
+        VStack(alignment: .leading, spacing: 10) {
+            ForEach(card.interfaces) { interface in
+                interfaceSection(interface)
+            }
+        }
+        .opacity(card.isStale ? 0.5 : 1)
     }
 
     private func interfaceSection(_ interface: StatusCardViewModel.Interface) -> some View {

@@ -208,6 +208,27 @@ final class StatusCardViewModelTests: XCTestCase {
         XCTAssertEqual(viewModel.errorMessage, "boom")
     }
 
+    // MARK: - Устаревшие данные (истёк грейс снапшота)
+
+    func testIsStalePassedThroughInitWithDefaultFalse() {
+        let interfaces = [WGInterface(name: "utun3", peers: [makePeer("a", handshakeSecondsAgo: 60)])]
+
+        let fresh = makeViewModel(interfaces)
+        XCTAssertFalse(fresh.isStale, "дефолт false — существующие вызовы init не меняются")
+
+        let stale = StatusCardViewModel(interfaces: interfaces, isStale: true, now: now)
+        XCTAssertTrue(stale.isStale, "isStale прокидывается в инициализацию")
+    }
+
+    func testIsStaleParticipatesInEquatable() {
+        let interfaces = [WGInterface(name: "utun3", peers: [makePeer("a", handshakeSecondsAgo: 60)])]
+        let fresh = makeViewModel(interfaces)
+        let stale = StatusCardViewModel(interfaces: interfaces, isStale: true, now: now)
+
+        XCTAssertNotEqual(fresh, stale, "isStale входит в Equatable — смена устарелости меняет карточку")
+        XCTAssertEqual(fresh, makeViewModel(interfaces), "одинаковый isStale — view-модели равны")
+    }
+
     // MARK: - wg-missing: команды установки CLI
 
     func testWGMissingShowsMessageAndInstallCommands() {
@@ -254,7 +275,7 @@ final class StatusCardViewModelTests: XCTestCase {
             for key in [
                 "badge.full_tunnel", "peer.handshake_never",
                 "legend.fresh", "legend.aging", "legend.stale", "legend.toggle",
-                "card.copy", "card.copied",
+                "card.copy", "card.copied", "status.stale_data",
             ] {
                 let raw = bundle?.localizedString(forKey: key, value: "MISSING", table: "Localizable")
                 XCTAssertNotEqual(raw, "MISSING", "ключ \(key) отсутствует в \(language)")

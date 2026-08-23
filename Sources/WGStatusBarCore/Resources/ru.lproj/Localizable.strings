@@ -1,4 +1,5 @@
 "status.no_interfaces" = "Нет интерфейсов";
+"status.stale_data" = "Данные устарели";
 "button.refresh" = "Обновить";
 "button.open_configs" = "Открыть конфиги WireGuard";
 "button.tunnel_management_soon" = "Управление тоннелями (скоро)";

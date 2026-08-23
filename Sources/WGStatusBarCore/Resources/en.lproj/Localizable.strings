@@ -1,4 +1,5 @@
 "status.no_interfaces" = "No interfaces";
+"status.stale_data" = "Data is stale";
 "button.refresh" = "Refresh";
 "button.open_configs" = "Open WireGuard configs";
 "button.tunnel_management_soon" = "Tunnel management (coming soon)";
