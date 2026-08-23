@@ -331,11 +331,11 @@ final class InstallerService {
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 - Modify: `Tests/WGStatusBarTests/StatusItemControllerTests.swift`
 
-- [ ] тест: `StatusMenuStructure.entries(refreshEnabled:serviceState:)` — `absent` → «Установить», `broken`/`outdated` → «Обновить», `installed` → «Удалить», пункт перед «Выход»
-- [ ] тест: `performStatusAction(.installService/.uninstallService)` дёргает инжектнутый установщик; прочие действия не тронуты
-- [ ] реализация: кейсы `StatusMenuAction`, расширение структуры меню, диспетчеризация с `InstallerService`, контроллер прокидывает `model.serviceState`
-- [ ] инъекция `InstallerService` в `Sources/App/main.swift`
-- [ ] `swift test` зелёный
+- [x] тест: `StatusMenuStructure.entries(refreshEnabled:serviceState:)` — `absent` → «Установить», `broken`/`outdated` → «Обновить», `installed` → «Удалить», пункт перед «Выход»
+- [x] тест: `performStatusAction(.installService/.uninstallService)` дёргает инжектнутый установщик; прочие действия не тронуты
+- [x] реализация: кейсы `StatusMenuAction`, расширение структуры меню, диспетчеризация с `InstallerService`, контроллер прокидывает `model.serviceState`
+- [x] инъекция `InstallerService` в `Sources/App/main.swift`
+- [x] `swift test` зелёный
 
 ### Task 12: Скрипты install/uninstall и сборка .app
 

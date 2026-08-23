@@ -8,7 +8,19 @@ enum StatusMenuAction: Int, Equatable {
     case openConfigs = 2
     case manageTunnels = 3
     case quit = 4
+    case installService = 5
+    case uninstallService = 6
 }
+
+/// Установка/удаление сервиса демона для диспетчеризации пунктов меню;
+/// инжектруется для тестов (продакшн — `InstallerService`, привязывается
+/// в AppDelegate).
+public protocol ServiceInstalling: AnyObject {
+    func install() async
+    func uninstall() async
+}
+
+extension InstallerService: ServiceInstalling {}
 
 /// Пункт-карточка не подсвечивается нативно: своё состояние рисует SwiftUI-контент
 /// (референс CodexBar — `MenuCardMenuItem` с `isHighlighted == false`).
@@ -47,9 +59,11 @@ enum StatusMenuStructure {
         case separator
     }
 
-    /// Карточка → разделитель → Обновить/Конфиги/Управление → разделитель → Выход.
-    /// `refreshEnabled = false`, пока идёт refresh (спиннер в карточке).
-    static func entries(refreshEnabled: Bool = true) -> [Entry] {
+    /// Карточка → разделитель → Обновить/Конфиги/Управление → разделитель →
+    /// Сервис (по состоянию) → Выход. `refreshEnabled = false`, пока идёт
+    /// refresh (спиннер в карточке); пункт сервиса: `absent` → «Установить»,
+    /// `broken`/`outdated` → «Обновить» (переустановка), `installed` → «Удалить».
+    static func entries(refreshEnabled: Bool = true, serviceState: ServiceState = .absent) -> [Entry] {
         [
             .card,
             .separator,
@@ -57,8 +71,23 @@ enum StatusMenuStructure {
             .action(id: .openConfigs, title: L10n.string("button.open_configs"), keyEquivalent: "o", modifiers: .command, isEnabled: true),
             .action(id: .manageTunnels, title: L10n.string("button.tunnel_management_soon"), keyEquivalent: "", modifiers: [], isEnabled: false),
             .separator,
+            serviceEntry(for: serviceState),
             .action(id: .quit, title: L10n.string("button.quit"), keyEquivalent: "q", modifiers: .command, isEnabled: true),
         ]
+    }
+
+    /// Пункт меню сервиса из состояния: демона нет — установить; не отвечает
+    /// или устарел — обновить (скрипт установки идемпотентен, действие то же);
+    /// жив — удалить.
+    private static func serviceEntry(for state: ServiceState) -> Entry {
+        switch state {
+        case .absent:
+            return .action(id: .installService, title: L10n.string("button.install_service"), keyEquivalent: "", modifiers: [], isEnabled: true)
+        case .broken, .outdated:
+            return .action(id: .installService, title: L10n.string("button.update_service"), keyEquivalent: "", modifiers: [], isEnabled: true)
+        case .installed:
+            return .action(id: .uninstallService, title: L10n.string("button.remove_service"), keyEquivalent: "", modifiers: [], isEnabled: true)
+        }
     }
 }
 
@@ -108,14 +137,18 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     private static let cardWidth: CGFloat = 320
 
     private let model: WireGuardStatusModel
+    /// Установщик сервиса для пунктов меню (продакшн — `InstallerService`,
+    /// колбэки привязываются в AppDelegate).
+    private let installer: ServiceInstalling
     private let statusItem: NSStatusItem
     private var cancellable: AnyCancellable?
     private weak var menu: NSMenu?
     /// Хостинг-вью карточки последней сборки — для перемера высоты (ⓘ-легенда).
     private var cardHostingView: NSHostingView<StatusCardView>?
 
-    public init(model: WireGuardStatusModel) {
+    public init(model: WireGuardStatusModel, installer: ServiceInstalling) {
         self.model = model
+        self.installer = installer
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
@@ -175,7 +208,10 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     private func rebuildMenu() {
         guard let menu else { return }
         let items = StatusMenuFactory.makeItems(
-            from: StatusMenuStructure.entries(refreshEnabled: !model.isLoading),
+            from: StatusMenuStructure.entries(
+                refreshEnabled: !model.isLoading,
+                serviceState: model.serviceState
+            ),
             target: self,
             action: #selector(statusMenuAction(_:)),
             cardItemProvider: makeCardItem
@@ -227,11 +263,12 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     // MARK: - Действия пунктов
 
     /// Диспетчеризация действий меню — статически, чтобы тестировать без
-    /// создания `NSStatusItem` (quit инжектится: реальный обработчик зовёт
-    /// `NSApplication.terminate`).
+    /// создания `NSStatusItem` (quit и установщик инжектятся: реальный
+    /// обработчик зовёт `NSApplication.terminate`, установщик — InstallerService).
     static func performStatusAction(
         _ action: StatusMenuAction,
         model: WireGuardStatusModel,
+        installer: ServiceInstalling? = nil,
         quit: () -> Void
     ) {
         switch action {
@@ -242,6 +279,16 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
             model.openWireGuardConfigFolder()
         case .manageTunnels:
             break  // placeholder — управление туннелями появится позже
+        case .installService:
+            // «Установить» и «Обновить» — одно действие: скрипт установки
+            // идемпотентен (bootout → cp → bootstrap). Промпт и разбор
+            // результата — внутри установщика (отмена — тихий no-op, сбой —
+            // в ошибку модели колбэком), здесь только запуск.
+            guard let installer else { return }
+            Task { await installer.install() }
+        case .uninstallService:
+            guard let installer else { return }
+            Task { await installer.uninstall() }
         case .quit:
             quit()
         }
@@ -249,7 +296,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func statusMenuAction(_ sender: NSMenuItem) {
         guard let action = StatusMenuAction(rawValue: sender.tag) else { return }
-        Self.performStatusAction(action, model: model) {
+        Self.performStatusAction(action, model: model, installer: installer) {
             NSApplication.shared.terminate(nil)
         }
     }

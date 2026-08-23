@@ -2,6 +2,9 @@
 "button.refresh" = "Обновить";
 "button.open_configs" = "Открыть конфиги WireGuard";
 "button.tunnel_management_soon" = "Управление тоннелями (скоро)";
+"button.install_service" = "Установить сервис";
+"button.update_service" = "Обновить сервис";
+"button.remove_service" = "Удалить сервис";
 "button.quit" = "Выход";
 "menu.title.on" = "wg: on";
 "menu.title.off" = "wg: off";

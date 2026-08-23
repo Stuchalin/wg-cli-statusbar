@@ -362,6 +362,13 @@ public final class WireGuardStatusModel: ObservableObject {
         lastFailure = .generic(L10n.string("error.config_folder_not_found"))
     }
 
+    /// Ошибка установки/удаления сервиса демона (stderr скрипта или сбой
+    /// запуска osascript): текст — в ошибку карточки на один тик, следующий
+    /// refresh сотрёт. Привязывается к `InstallerService.onFailure` в AppDelegate.
+    public func reportServiceFailure(_ message: String) {
+        lastFailure = .generic(message)
+    }
+
     private func startTimer() {
         // .common, а не дефолтный режим run loop: пока открыто меню NSStatusItem,
         // главный run loop работает в NSEventTrackingRunLoopMode и таймер из
