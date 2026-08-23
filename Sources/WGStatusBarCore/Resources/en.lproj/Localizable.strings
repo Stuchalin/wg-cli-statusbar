@@ -11,6 +11,7 @@
 "error.wg_missing" = "WireGuard CLI is not installed";
 "error.daemon_outdated" = "Helper service is outdated — update it from the menu";
 "error.service_unreachable" = "Helper service is unreachable";
+"error.install_script_missing" = "Service install script is missing — run the app from its .app bundle";
 "card.copy" = "Copy";
 "card.copied" = "Copied";
 "ago.seconds" = "%@ s ago";

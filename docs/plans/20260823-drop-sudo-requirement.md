@@ -316,11 +316,11 @@ final class InstallerService {
 - Modify: `Sources/WGStatusBarCore/Resources/en.lproj/Localizable.strings`
 - Modify: `Sources/WGStatusBarCore/Resources/ru.lproj/Localizable.strings`
 
-- [ ] тест: сборка osascript-команды из путей бандла — install и uninstall (два вызова одной чистой функции), корректное экранирование путей с пробелами (`do shell script "'...' --binary '...'" with administrator privileges`)
-- [ ] тест: `interpret(exitCode:stderr:)` — успех; отмена (User canceled) → тихий результат; сбой → ошибка со stderr
-- [ ] тест: `installScriptPath(bundle:)` — резолв из бандла; nil без скрипта (dev без .app) → понятная ошибка до запуска osascript
-- [ ] реализация: чистая функция построения команды + запуск `Process` (запуск не тестируем), колбэк успеха → `refresh()` у модели; L10n-ключ `error.install_script_missing` в обоих lproj в этой задаче
-- [ ] `swift test` зелёный
+- [x] тест: сборка osascript-команды из путей бандла — install и uninstall (два вызова одной чистой функции), корректное экранирование путей с пробелами (`do shell script "'...' --binary '...'" with administrator privileges`)
+- [x] тест: `interpret(exitCode:stderr:)` — успех; отмена (User canceled) → тихий результат; сбой → ошибка со stderr
+- [x] тест: `installScriptPath(bundle:)` — резолв из бандла; nil без скрипта (dev без .app) → понятная ошибка до запуска osascript
+- [x] реализация: чистая функция построения команды + запуск `Process` (запуск не тестируем), колбэк успеха → `refresh()` у модели; L10n-ключ `error.install_script_missing` в обоих lproj в этой задаче
+- [x] `swift test` зелёный
 
 ### Task 11: Меню — пункты установки/обновления/удаления
 
