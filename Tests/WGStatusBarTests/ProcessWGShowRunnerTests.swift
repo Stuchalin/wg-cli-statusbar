@@ -21,6 +21,46 @@ final class ProcessWGShowRunnerTests: XCTestCase {
         XCTAssertEqual(output, "hello")
     }
 
+    func testExitCode127MapsToWgMissing() async throws {
+        // 127 — «command not found»: wg нет на PATH фолбэк-раннера. Типизированная
+        // ошибка вместо generic-строки: карточка покажет команды установки (Task 9).
+        let runner = makeRunner(arguments: ["-f", "-c", "exit 127"])
+
+        do {
+            _ = try await runner.runDump()
+            XCTFail("ненулевой exit code должен давать ошибку")
+        } catch let error as StatusFailure {
+            XCTAssertEqual(error, .wgMissing)
+        }
+    }
+
+    func testExitCode127WithStderrStillWgMissing() async throws {
+        // Реальный zsh пишет «command not found: wg» в stderr и выходит 127 —
+        // текст stderr не должен перекрывать классификацию по коду.
+        let runner = makeRunner(arguments: ["-f", "-c", "echo 'zsh: command not found: wg' 1>&2; exit 127"])
+
+        do {
+            _ = try await runner.runDump()
+            XCTFail("ненулевой exit code должен давать ошибку")
+        } catch let error as StatusFailure {
+            XCTAssertEqual(error, .wgMissing)
+        }
+    }
+
+    func testNeighboringExitCode126KeepsNSErrorBehavior() async throws {
+        // Соседний код 126 (found but not executable) — прежнее поведение NSError,
+        // маппинг не должен зацепить лишнее.
+        let runner = makeRunner(arguments: ["-f", "-c", "exit 126"])
+
+        do {
+            _ = try await runner.runDump()
+            XCTFail("ненулевой exit code должен давать ошибку")
+        } catch let error as NSError {
+            XCTAssertEqual(error.code, 126)
+            XCTAssertEqual(error.localizedDescription, L10n.string("error.wg_show_failed", "126"))
+        }
+    }
+
     func testNonZeroExitWithoutStderrUsesLocalizedFailure() async throws {
         let runner = makeRunner(arguments: ["-f", "-c", "exit 3"])
 

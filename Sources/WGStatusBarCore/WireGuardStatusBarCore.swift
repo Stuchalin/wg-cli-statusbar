@@ -20,7 +20,9 @@ public protocol WGShowCommandRunning {
 
 /// Продакшн-раннер: `/bin/zsh -lc "wg show all dump"` (login-shell, чтобы Homebrew's
 /// `wg` был на PATH) с таймаутом. Процесс и таймаут инжектятся для тестов раннера.
-/// Сырой вывод содержит секреты — не логировать.
+/// Exit 127 (command not found) → `StatusFailure.wgMissing` — как `err wg-missing`
+/// от демона, карточка показывает команды установки. Сырой вывод содержит
+/// секреты — не логировать.
 public struct ProcessWGShowRunner: WGShowCommandRunning {
     private let executableURL: URL
     private let arguments: [String]
@@ -135,6 +137,12 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
         let errorText = String(data: errorData, encoding: .utf8) ?? ""
 
         guard process.terminationStatus == 0 else {
+            // 127 — command not found: wg нет на PATH. Типизированная ошибка
+            // приоритетнее текста stderr («zsh: command not found: wg» бесполезен
+            // в карточке — ей нужны команды установки, Task 9).
+            if process.terminationStatus == 127 {
+                throw StatusFailure.wgMissing
+            }
             if errorText.isEmpty {
                 throw NSError(
                     domain: "WGStatusBar",
@@ -208,9 +216,10 @@ public final class WireGuardStatusModel: ObservableObject {
         lastFailure?.localizedMessage
     }
 
-    /// Любая ошибка раннера → `StatusFailure`: типизированные проходят как
-    /// есть, чужие (фолбэк-раннер до Task 7) заворачиваются в `.generic` с их
-    /// текстом — поведение строки ошибки не меняется.
+    /// Любая ошибка раннера → `StatusFailure`: типизированные (сокет-раннер,
+    /// exit 127 фолбэка) проходят как есть, чужие (таймаут и сбой запуска
+    /// процессного раннера) заворачиваются в `.generic` с их текстом —
+    /// поведение строки ошибки не меняется.
     private static func failure(from error: Error) -> StatusFailure {
         error as? StatusFailure ?? .generic(error.localizedDescription)
     }

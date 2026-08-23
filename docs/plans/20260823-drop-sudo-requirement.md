@@ -276,10 +276,10 @@ final class InstallerService {
 - Modify: `Sources/WGStatusBarCore/WireGuardStatusBarCore.swift` (`ProcessWGShowRunner`)
 - Modify: `Tests/WGStatusBarTests/ProcessWGShowRunnerTests.swift`
 
-- [ ] тест: команда с exit `127` (инжектированный короткоживущий zsh) → `.wgMissing`, не generic
-- [ ] тест: прочие ненулевые коды — прежнее поведение
-- [ ] реализация: маппинг `terminationStatus == 127` → `.wgMissing`
-- [ ] `swift test` зелёный
+- [x] тест: команда с exit `127` (инжектированный короткоживущий zsh) → `.wgMissing`, не generic
+- [x] тест: прочие ненулевые коды — прежнее поведение
+- [x] реализация: маппинг `terminationStatus == 127` → `.wgMissing`
+- [x] `swift test` зелёный
 
 ### Task 8: Состояние сервиса и выбор раннера в модели
 
