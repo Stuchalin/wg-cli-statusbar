@@ -27,9 +27,9 @@ final class StatusCardViewModelTests: XCTestCase {
     private func makeViewModel(
         _ interfaces: [WGInterface],
         isLoading: Bool = false,
-        errorMessage: String? = nil
+        failure: StatusFailure? = nil
     ) -> StatusCardViewModel {
-        StatusCardViewModel(interfaces: interfaces, isLoading: isLoading, errorMessage: errorMessage, now: now)
+        StatusCardViewModel(interfaces: interfaces, isLoading: isLoading, failure: failure, now: now)
     }
 
     // MARK: - Заголовок интерфейса: имя и цвет точки (свежесть)
@@ -202,10 +202,43 @@ final class StatusCardViewModelTests: XCTestCase {
     }
 
     func testErrorAndLoadingPassThrough() {
-        let viewModel = makeViewModel([], isLoading: true, errorMessage: "boom")
+        let viewModel = makeViewModel([], isLoading: true, failure: .generic("boom"))
 
         XCTAssertTrue(viewModel.isLoading)
         XCTAssertEqual(viewModel.errorMessage, "boom")
+    }
+
+    // MARK: - wg-missing: команды установки CLI
+
+    func testWGMissingShowsMessageAndInstallCommands() {
+        let viewModel = makeViewModel([], failure: .wgMissing)
+
+        XCTAssertEqual(viewModel.errorMessage, L10n.string("error.wg_missing"), "человекочитаемое сообщение об отсутствии CLI")
+        XCTAssertEqual(viewModel.installCommands, StatusCardViewModel.wgInstallCommands, "команды — константы вью-модели")
+        XCTAssertEqual(StatusCardViewModel.wgInstallCommands, [
+            "brew install wireguard-tools",
+            "sudo port install wireguard-tools",
+        ], "Homebrew и MacPorts, литеральные строки без L10n")
+    }
+
+    func testOtherFailuresKeepPlainErrorRender() {
+        let failures: [StatusFailure] = [
+            .commandTimeout,
+            .daemonOutdated,
+            .connectionRefused,
+            .badResponse,
+            .generic("boom"),
+        ]
+
+        for failure in failures {
+            let viewModel = makeViewModel([], failure: failure)
+            XCTAssertEqual(viewModel.errorMessage, failure.localizedMessage, "\(failure) — прежний рендер ошибки")
+            XCTAssertTrue(viewModel.installCommands.isEmpty, "\(failure) — блок команд установки не показывается")
+        }
+
+        let clean = makeViewModel([])
+        XCTAssertNil(clean.errorMessage, "без ошибки — строки ошибки нет")
+        XCTAssertTrue(clean.installCommands.isEmpty)
     }
 
     // MARK: - Локализация новых ключей карточки
@@ -221,6 +254,7 @@ final class StatusCardViewModelTests: XCTestCase {
             for key in [
                 "badge.full_tunnel", "peer.handshake_never",
                 "legend.fresh", "legend.aging", "legend.stale", "legend.toggle",
+                "card.copy", "card.copied",
             ] {
                 let raw = bundle?.localizedString(forKey: key, value: "MISSING", table: "Localizable")
                 XCTAssertNotEqual(raw, "MISSING", "ключ \(key) отсутствует в \(language)")
@@ -230,5 +264,26 @@ final class StatusCardViewModelTests: XCTestCase {
             }
         }
         XCTAssertTrue(keysWithPlaceholder.isEmpty, "у ключей карточки не должно быть плейсхолдеров: \(keysWithPlaceholder)")
+    }
+
+    /// Сервисные ключи (пункты меню и ошибки демона/установки) обязаны лежать
+    /// в обеих таблицах: `NSLocalizedString` для отсутствующего ключа вернёт
+    /// сам ключ — пропавшая строка всплывёт пользователю как сырой ключ.
+    func testServiceKeysExistInBothLocalizations() throws {
+        for language in ["en", "ru"] {
+            let lprojPath = try XCTUnwrap(
+                Bundle.module.path(forResource: language, ofType: "lproj"),
+                "нет \(language).lproj в бандле модуля"
+            )
+            let bundle = Bundle(path: lprojPath)
+            for key in [
+                "button.install_service", "button.update_service", "button.remove_service",
+                "error.wg_missing", "error.daemon_outdated", "error.service_unreachable",
+                "error.install_script_missing",
+            ] {
+                let raw = bundle?.localizedString(forKey: key, value: "MISSING", table: "Localizable")
+                XCTAssertNotEqual(raw, "MISSING", "ключ \(key) отсутствует в \(language)")
+            }
+        }
     }
 }

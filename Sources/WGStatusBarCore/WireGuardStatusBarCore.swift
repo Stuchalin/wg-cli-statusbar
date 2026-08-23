@@ -2,17 +2,6 @@ import AppKit
 import Combine
 import Foundation
 
-private enum WGShowError: LocalizedError {
-    case commandTimeout
-
-    var errorDescription: String? {
-        switch self {
-        case .commandTimeout:
-            return L10n.string("error.wg_show_timeout")
-        }
-    }
-}
-
 /// Запускает `wg show all dump` и возвращает сырой вывод; инжектится для тестов.
 public protocol WGShowCommandRunning {
     func runDump() async throws -> String
@@ -20,7 +9,9 @@ public protocol WGShowCommandRunning {
 
 /// Продакшн-раннер: `/bin/zsh -lc "wg show all dump"` (login-shell, чтобы Homebrew's
 /// `wg` был на PATH) с таймаутом. Процесс и таймаут инжектятся для тестов раннера.
-/// Сырой вывод содержит секреты — не логировать.
+/// Exit 127 (command not found) → `StatusFailure.wgMissing` — как `err wg-missing`
+/// от демона, карточка показывает команды установки. Сырой вывод содержит
+/// секреты — не логировать.
 public struct ProcessWGShowRunner: WGShowCommandRunning {
     private let executableURL: URL
     private let arguments: [String]
@@ -128,13 +119,19 @@ public struct ProcessWGShowRunner: WGShowCommandRunning {
         // Убитый сигналом или завершившийся с ошибкой при сработавшем
         // дедлайне — таймаут.
         if stateQueue.sync(execute: { timedOut }), process.terminationStatus != 0 {
-            throw WGShowError.commandTimeout
+            throw StatusFailure.commandTimeout
         }
 
         let output = String(data: outputData, encoding: .utf8) ?? ""
         let errorText = String(data: errorData, encoding: .utf8) ?? ""
 
         guard process.terminationStatus == 0 else {
+            // 127 — command not found: wg нет на PATH. Типизированная ошибка
+            // приоритетнее текста stderr («zsh: command not found: wg» бесполезен
+            // в карточке — ей нужны команды установки, Task 9).
+            if process.terminationStatus == 127 {
+                throw StatusFailure.wgMissing
+            }
             if errorText.isEmpty {
                 throw NSError(
                     domain: "WGStatusBar",
@@ -164,41 +161,96 @@ extension WireGuardTunnelNamer: WireGuardTunnelNaming {}
 public final class WireGuardStatusModel: ObservableObject {
     @Published public private(set) var interfaces: [WGInterface] = []
     @Published public private(set) var isLoading = false
-    @Published public private(set) var lastError: String?
+    /// Типизированная ошибка последнего тика; живёт один refresh-цикл.
+    @Published public private(set) var lastFailure: StatusFailure?
+    /// Состояние сервиса демона, выведено из фактов последнего тика
+    /// (сокет-файл + исход обмена) — не хранится, пересчитывается на каждом
+    /// refresh. Управляет пунктом меню установки/обновления/удаления сервиса.
+    @Published public private(set) var serviceState: ServiceState = .absent
 
     private let commandRunner: WGShowCommandRunning
     private let tunnelNamer: WireGuardTunnelNaming
+    /// Probe сокета демона на каждом refresh: файл есть → работаем через
+    /// демон, нет → фолбэк (продакшн — процессный раннер, dev/sudo).
+    private let socketExists: () -> Bool
+    private let socketPath: String
     private var timer: Timer?
     private let refreshInterval: TimeInterval = 5
     /// Номер текущего refresh; завершения старых поколений отбрасываются.
     private var refreshGeneration = 0
 
-    public init() {
-        self.commandRunner = ProcessWGShowRunner()
-        self.tunnelNamer = WireGuardTunnelNamer()
+    public convenience init() {
+        self.init(
+            commandRunner: ProcessWGShowRunner(),
+            tunnelNamer: WireGuardTunnelNamer(),
+            socketExists: { FileManager.default.fileExists(atPath: helperSocketPath) },
+            socketPath: helperSocketPath
+        )
         refresh()
         startTimer()
     }
 
-    internal init(testing interfaces: [WGInterface]) {
-        self.commandRunner = ProcessWGShowRunner()
-        self.tunnelNamer = WireGuardTunnelNamer()
+    internal convenience init(testing interfaces: [WGInterface]) {
+        self.init(
+            commandRunner: ProcessWGShowRunner(),
+            tunnelNamer: WireGuardTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath
+        )
         self.interfaces = interfaces
     }
 
-    internal init(commandRunner: WGShowCommandRunning, tunnelNamer: WireGuardTunnelNaming) {
+    /// Перегрузка для существующих refresh-тестов: probe всегда false,
+    /// дефолтный путь — сокетный путь не активируется.
+    internal convenience init(commandRunner: WGShowCommandRunning, tunnelNamer: WireGuardTunnelNaming) {
+        self.init(
+            commandRunner: commandRunner,
+            tunnelNamer: tunnelNamer,
+            socketExists: { false },
+            socketPath: helperSocketPath
+        )
+    }
+
+    /// Полный init: свой probe сокета и путь — тесты состояния инжектируют
+    /// мутабельный флаг и tmp-сокет.
+    internal init(
+        commandRunner: WGShowCommandRunning,
+        tunnelNamer: WireGuardTunnelNaming,
+        socketExists: @escaping () -> Bool,
+        socketPath: String
+    ) {
         self.commandRunner = commandRunner
         self.tunnelNamer = tunnelNamer
+        self.socketExists = socketExists
+        self.socketPath = socketPath
     }
 
     deinit {
         timer?.invalidate()
     }
 
-    public var menuTitle: String {
+    /// Хотя бы один интерфейс подключён — состояние иконки меню-бара.
+    public var isAnyConnected: Bool {
         interfaces.contains(where: \.isConnected)
-            ? L10n.string("menu.title.on")
-            : L10n.string("menu.title.off")
+    }
+
+    /// Строка ошибки для карточки, вычисляется из `lastFailure`; тип `String?`
+    /// сохранён — `StatusCardView` читает её без правок. Обновления едут через
+    /// `objectWillChange` от `lastFailure`, сеттера нет.
+    public var lastError: String? {
+        lastFailure?.localizedMessage
+    }
+
+    /// Любая ошибка раннера → `StatusFailure`: типизированные (сокет-раннер,
+    /// таймаут и exit 127 фолбэка) проходят как есть, чужие (сбой запуска
+    /// процессного раннера) заворачиваются в `.generic` с их текстом —
+    /// поведение строки ошибки не меняется.
+    private static func failure(from error: Error) -> StatusFailure {
+        error as? StatusFailure ?? .generic(error.localizedDescription)
+    }
+
+    public var menuTitle: String {
+        isAnyConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);
@@ -210,9 +262,16 @@ public final class WireGuardStatusModel: ObservableObject {
         refreshGeneration += 1
         let generation = refreshGeneration
         isLoading = true
-        lastError = nil
+        lastFailure = nil
 
-        let runner = commandRunner
+        // Выбор раннера из фактов на каждом тике: сокет демона есть →
+        // SocketWGShowRunner; нет → инжектированный фолбэк (продакшн —
+        // ProcessWGShowRunner, dev-режим под sudo). Факт фиксируется до
+        // запуска — тем же фактом по завершении выводится состояние сервиса.
+        let socketPresent = socketExists()
+        let runner: WGShowCommandRunning = socketPresent
+            ? SocketWGShowRunner(socketPath: socketPath)
+            : commandRunner
         let namer = tunnelNamer
         Task.detached {
             do {
@@ -226,12 +285,15 @@ public final class WireGuardStatusModel: ObservableObject {
                     guard let self, generation == self.refreshGeneration else { return }
                     self.interfaces = parsed
                     self.isLoading = false
+                    self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))
                 }
             } catch {
+                let failure = Self.failure(from: error)
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
-                    self.lastError = error.localizedDescription
+                    self.lastFailure = failure
                     self.isLoading = false
+                    self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .failure(failure))
                 }
             }
         }
@@ -286,7 +348,14 @@ public final class WireGuardStatusModel: ObservableObject {
                 return
             }
         }
-        lastError = L10n.string("error.config_folder_not_found")
+        lastFailure = .generic(L10n.string("error.config_folder_not_found"))
+    }
+
+    /// Ошибка установки/удаления сервиса демона (stderr скрипта или сбой
+    /// запуска osascript): текст — в ошибку карточки на один тик, следующий
+    /// refresh сотрёт. Привязывается к `InstallerService.onFailure` в AppDelegate.
+    public func reportServiceFailure(_ message: String) {
+        lastFailure = .generic(message)
     }
 
     private func startTimer() {
@@ -304,8 +373,19 @@ public final class WireGuardStatusModel: ObservableObject {
 }
 
 enum L10n {
+    // In an .app the resource bundle is copied to Contents/Resources —
+    // the standard location and the only one codesign accepts (files in the
+    // .app root make it "unsealed"). The generated Bundle.module accessor
+    // looks in the .app root instead, so it only works for bare-binary dev
+    // runs and stays as the fallback.
+    private static let bundle: Bundle = {
+        let standard = Bundle.main.resourceURL?
+            .appendingPathComponent("WGStatusBar_WGStatusBarCore.bundle")
+        return standard.flatMap(Bundle.init(url:)) ?? .module
+    }()
+
     static func string(_ key: String, _ args: String...) -> String {
-        let raw = NSLocalizedString(key, tableName: "Localizable", bundle: .module, comment: "")
+        let raw = NSLocalizedString(key, tableName: "Localizable", bundle: bundle, comment: "")
         if args.isEmpty {
             return raw
         }

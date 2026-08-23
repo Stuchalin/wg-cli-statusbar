@@ -1,0 +1,263 @@
+import Foundation
+
+/// Результат установки/удаления сервиса демона.
+public enum InstallResult: Equatable {
+    case success
+    /// Пользователь закрыл промпт пароль/Touch ID — тихий no-op, не ошибка.
+    case cancelled
+    case failure(String)
+}
+
+/// Подготовленный запуск osascript: argv либо локализованная ошибка до
+/// старта процесса (скрипта нет — dev-запуск голого бинаря без .app).
+enum PreparedInstallCommand: Equatable {
+    case argv([String])
+    case failure(String)
+}
+
+/// Установка/удаление root-демона кнопкой из меню: osascript
+/// `do shell script ... with administrator privileges` показывает системный
+/// промпт (пароль/Touch ID) и запускает скрипт из бандла приложения от root.
+///
+/// Чистые части — сборка argv osascript, разбор кода возврата, резолв скрипта
+/// из бандла — статические функции, тестируются напрямую. Сам запуск с
+/// системным промптом не автоматизируется (Testing Strategy).
+public final class InstallerService {
+    /// Успех — немедленный refresh модели (колбэк привязывается в AppDelegate):
+    /// карточка оживает, не дожидаясь тика таймера.
+    /// Вызывается на главном потоке.
+    public var onSuccess: (() -> Void)?
+    /// Сбой — текст в ошибку модели на один тик. Отмена промпта сюда не
+    /// попадает (тихий no-op). Вызывается на главном потоке.
+    public var onFailure: ((String) -> Void)?
+
+    /// Бандл со скриптами установки (продакшн — `Bundle.main`, .app).
+    private let bundle: Bundle
+    /// Путь бинаря демона для `install-daemon.sh --binary <путь>`.
+    private let binaryPath: String?
+    /// Запуск osascript; инжектируется для тестов диспетчеризации колбэков —
+    /// сам запуск с системным промптом не автоматизируется (Testing Strategy).
+    private let runOsa: ([String]) -> InstallResult
+
+    /// Уже идёт запуск (висит промпт или работает скрипт): пункт меню не
+    /// блокируется на время операции, повторный клик обязан быть no-op.
+    /// Доступ под локом: install()/uninstall() — async, вызовы конкурируют.
+    private let runningLock = NSLock()
+    private var isRunning = false
+
+    public convenience init() {
+        self.init(bundle: .main)
+    }
+
+    public init(
+        bundle: Bundle,
+        binaryPath: String? = nil,
+        runOsa: (([String]) -> InstallResult)? = nil
+    ) {
+        self.bundle = bundle
+        self.binaryPath = binaryPath ?? Self.defaultBinaryPath(in: bundle)
+        self.runOsa = runOsa ?? Self.runOsaScript
+    }
+
+    /// Путь хелпера в бандле приложения — туда его кладёт build-app.sh.
+    /// В dev-запуске голого бинаря может не существовать; установка падает
+    /// раньше, на отсутствующем скрипте, а в неполной сборке .app — на
+    /// отсутствующем бинаре (проверка в `command`).
+    private static func defaultBinaryPath(in bundle: Bundle) -> String {
+        bundle.bundleURL.appendingPathComponent("Contents/MacOS/WGStatusBarHelper").path
+    }
+
+    // MARK: - Чистые функции (тестируются)
+
+    /// Резолв скрипта установки из бандла; nil в dev-запуске голого бинаря —
+    /// понятная ошибка до запуска osascript.
+    public static func installScriptPath(bundle: Bundle) -> String? {
+        bundle.path(forResource: "install-daemon", ofType: "sh")
+    }
+
+    /// Резолв скрипта удаления из бандла; nil в dev-запуске голого бинаря.
+    public static func uninstallScriptPath(bundle: Bundle) -> String? {
+        bundle.path(forResource: "uninstall-daemon", ofType: "sh")
+    }
+
+    /// argv запуска osascript: системный промпт + shell-команда. Пути в
+    /// одинарных кавычках внутри двойных кавычек AppleScript — пробелы не рвут
+    /// ни строку AppleScript, ни shell-команду. Путь к .app выбирает
+    /// пользователь (апостроф в имени каталога реален), а команда исполняется
+    /// от root — поэтому оба слоя экранируются: `'` для shell, `"` и `\` для
+    /// литерала AppleScript. Install передаёт `--binary <путь>`, uninstall
+    /// зовётся без него.
+    public static func osascriptCommand(scriptPath: String, binaryPath: String?) -> [String] {
+        var shellCommand = shellQuoted(scriptPath)
+        if let binaryPath {
+            shellCommand += " --binary " + shellQuoted(binaryPath)
+        }
+        return [
+            "/usr/bin/osascript",
+            "-e",
+            "do shell script \"\(applescriptEscaped(shellCommand))\" with administrator privileges"
+        ]
+    }
+
+    /// Оборачивает путь одинарными кавычками; встроенный апостроф закрывается
+    /// и переоткрывается (`'\''`) — стандартный способ выжить в POSIX-shell.
+    private static func shellQuoted(_ path: String) -> String {
+        "'" + path.replacingOccurrences(of: "'", with: "'\\''") + "'"
+    }
+
+    /// Экранирует `\` и `"` для строкового литерала AppleScript — путь
+    /// проходит через два слоя (AppleScript-строка → shell-команда).
+    private static func applescriptEscaped(_ text: String) -> String {
+        text
+            .replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+    }
+
+    /// Разбор кода возврата osascript: успех; отмена промпта пароль/Touch ID —
+    /// пользователь закрыл промпт, тихий no-op; остальное — сбой со stderr.
+    /// Отмена детектится по номеру ошибки AppleScript `(-128)` в конце stderr:
+    /// текст локализуется системой («User canceled» / «Отменено пользователем»),
+    /// номер — нет.
+    public static func interpret(exitCode: Int, stderr: String) -> InstallResult {
+        guard exitCode != 0 else { return .success }
+        let trimmed = stderr.trimmingCharacters(in: .whitespacesAndNewlines)
+        if trimmed.contains("(-128)") || trimmed.contains("User canceled") {
+            return .cancelled
+        }
+        return .failure(trimmed.isEmpty ? "exit code \(exitCode)" : trimmed)
+    }
+
+    /// Предстартовая сборка: скрипта нет (dev-запуск без .app) или бинаря
+    /// хелпера нет в бандле (неполная сборка .app) — локализованная ошибка
+    /// до osascript: админ-промпт не должен открываться под гарантированно
+    /// падающую в root-скрипте команду. Проверку существования бинаря делает
+    /// вызывающий (инъекция для тестов) — функция остаётся чистой; uninstall
+    /// бинарь не передаёт, проверка его не касается.
+    static func command(
+        scriptPath: String?,
+        binaryPath: String?,
+        binaryExists: Bool = true
+    ) -> PreparedInstallCommand {
+        guard let scriptPath else {
+            return .failure(L10n.string("error.install_script_missing"))
+        }
+        if binaryPath != nil, !binaryExists {
+            return .failure(L10n.string("error.helper_binary_missing"))
+        }
+        return .argv(osascriptCommand(scriptPath: scriptPath, binaryPath: binaryPath))
+    }
+
+    // MARK: - Запуск (промпт не автоматизируется)
+
+    public func install() async {
+        await run(
+            scriptPath: Self.installScriptPath(bundle: bundle),
+            binaryPath: binaryPath,
+            // Префлайт до привилегированной границы: бинаря в бандле нет —
+            // промпт не открываем, root-скрипт всё равно упал бы на `[ -f ]`.
+            binaryExists: binaryPath.map { FileManager.default.fileExists(atPath: $0) } ?? true
+        )
+    }
+
+    public func uninstall() async {
+        await run(scriptPath: Self.uninstallScriptPath(bundle: bundle), binaryPath: nil)
+    }
+
+    private func run(scriptPath: String?, binaryPath: String?, binaryExists: Bool = true) async {
+        // Повторный вызов, пока идёт первый (промпт висит, osascript кэширует
+        // авторизацию ~5 минут и вторая копия стартует сразу) — тихий no-op:
+        // два параллельных install-скрипта конкурировали бы за cp в один dest
+        // и launchctl bootstrap, выдавая ложную ошибку при успехе.
+        guard beginRunClaim() else { return }
+        defer { endRunClaim() }
+
+        let argv: [String]
+        switch Self.command(scriptPath: scriptPath, binaryPath: binaryPath, binaryExists: binaryExists) {
+        case .failure(let message):
+            await MainActor.run { onFailure?(message) }
+            return
+        case .argv(let value):
+            argv = value
+        }
+
+        let runOsa = self.runOsa
+        let result = await Task.detached(priority: .userInitiated) {
+            runOsa(argv)
+        }.value
+
+        await MainActor.run {
+            switch result {
+            case .success:
+                onSuccess?()
+            case .cancelled:
+                break  // тихий no-op — пользователь просто закрыл промпт
+            case .failure(let message):
+                onFailure?(message)
+            }
+        }
+    }
+
+    /// Захват права на запуск: true — вызов первый, false — уже идёт.
+    /// Синхронный метод-обёртка: `NSLock` из async-контекста запрещён
+    /// (Swift 6), критическая секция короткая и без await.
+    private func beginRunClaim() -> Bool {
+        runningLock.lock()
+        defer { runningLock.unlock() }
+        if isRunning { return false }
+        isRunning = true
+        return true
+    }
+
+    /// Освобождение права на запуск (defer в `run`).
+    private func endRunClaim() {
+        runningLock.lock()
+        defer { runningLock.unlock() }
+        isRunning = false
+    }
+
+    /// Синхронный запуск osascript; stdout скрипта не интересует, важны код
+    /// возврата и stderr.
+    private static func runOsaScript(_ argv: [String]) -> InstallResult {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: argv[0])
+        process.arguments = Array(argv.dropFirst())
+
+        let outPipe = Pipe()
+        let errPipe = Pipe()
+        process.standardOutput = outPipe
+        process.standardError = errPipe
+
+        do {
+            try process.run()
+        } catch {
+            return .failure(error.localizedDescription)
+        }
+
+        // Каналы дренируются параллельно ожиданию (по образцу
+        // ProcessWGShowRunner): заполненный буфер пайпа блокировал бы
+        // osascript на записи. Таймаута нет — промпт может висеть, пока
+        // пользователь думает: либо ответит, либо отменит.
+        var errorData = Data()
+        let drainQueue = DispatchQueue(label: "com.wgstatusbar.installer.drain", attributes: .concurrent)
+        let drained = DispatchGroup()
+
+        drained.enter()
+        drainQueue.async {
+            _ = outPipe.fileHandleForReading.readDataToEndOfFile()
+            drained.leave()
+        }
+        drained.enter()
+        drainQueue.async {
+            errorData = errPipe.fileHandleForReading.readDataToEndOfFile()
+            drained.leave()
+        }
+
+        process.waitUntilExit()
+        drained.wait()
+
+        return interpret(
+            exitCode: Int(process.terminationStatus),
+            stderr: String(data: errorData, encoding: .utf8) ?? ""
+        )
+    }
+}

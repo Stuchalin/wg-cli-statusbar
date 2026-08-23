@@ -1,3 +1,4 @@
+import AppKit
 import SwiftUI
 
 /// Чистые данные карточки статуса: считаются из модели без UI, тестируются юнит-тестами.
@@ -95,17 +96,29 @@ public struct StatusCardViewModel: Equatable {
 
     public let interfaces: [Interface]
     public let isLoading: Bool
+    /// Строка ошибки последнего тика — `failure?.localizedMessage`.
     public let errorMessage: String?
+    /// Команды установки CLI при `.wgMissing` (блок под ошибкой, клик —
+    /// копирование); пусто для прочих ошибок.
+    public let installCommands: [String]
+
+    /// Команды установки CLI WireGuard: Homebrew и MacPorts. Литеральные
+    /// константы — не локализуются (это команды, а не текст).
+    public static let wgInstallCommands = [
+        "brew install wireguard-tools",
+        "sudo port install wireguard-tools",
+    ]
 
     public init(
         interfaces: [WGInterface],
         isLoading: Bool = false,
-        errorMessage: String? = nil,
+        failure: StatusFailure? = nil,
         now: Date = Date()
     ) {
         self.interfaces = interfaces.map { Interface($0, now: now) }
         self.isLoading = isLoading
-        self.errorMessage = errorMessage
+        self.errorMessage = failure?.localizedMessage
+        self.installCommands = failure == .wgMissing ? Self.wgInstallCommands : []
     }
 
     /// Строка пустого состояния (интерфейсов нет); nil — когда есть что показать.
@@ -139,7 +152,7 @@ public struct StatusCardView: View {
         let card = StatusCardViewModel(
             interfaces: model.interfaces,
             isLoading: model.isLoading,
-            errorMessage: model.lastError
+            failure: model.lastFailure
         )
 
         VStack(alignment: .leading, spacing: 10) {
@@ -164,6 +177,10 @@ public struct StatusCardView: View {
                     .font(.caption)
                     .foregroundStyle(.red)
                     .lineLimit(2)
+            }
+
+            if !card.installCommands.isEmpty {
+                installCommandsSection(card.installCommands)
             }
 
             if let emptyText = card.emptyStateText {
@@ -246,6 +263,17 @@ public struct StatusCardView: View {
         }
     }
 
+    /// Блок команд установки CLI (`wgMissing`): моноширинные строки, клик —
+    /// копирование в pasteboard. Высота блока постоянна — `onContentChange`
+    /// не нужен.
+    private func installCommandsSection(_ commands: [String]) -> some View {
+        VStack(alignment: .leading, spacing: 4) {
+            ForEach(commands, id: \.self) { command in
+                InstallCommandRow(command: command)
+            }
+        }
+    }
+
     private var legend: some View {
         VStack(alignment: .leading, spacing: 4) {
             legendRow(color: .green, text: L10n.string("legend.fresh"))
@@ -271,5 +299,39 @@ public struct StatusCardView: View {
         case .aging: .orange
         case .stale, .never: .secondary
         }
+    }
+}
+
+/// Строка команды установки CLI: моноширинная команда + действие копирования;
+/// после клика кратко показывается «скопировано», затем метка возвращается.
+private struct InstallCommandRow: View {
+    private static let copiedIndicatorInterval: TimeInterval = 1.5
+
+    let command: String
+    @State private var isCopied = false
+
+    var body: some View {
+        Button {
+            NSPasteboard.general.clearContents()
+            NSPasteboard.general.setString(command, forType: .string)
+            isCopied = true
+            DispatchQueue.main.asyncAfter(deadline: .now() + Self.copiedIndicatorInterval) {
+                isCopied = false
+            }
+        } label: {
+            HStack(spacing: 6) {
+                Text(command)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(1)
+                    .truncationMode(.middle)
+                Spacer(minLength: 4)
+                Text(L10n.string(isCopied ? "card.copied" : "card.copy"))
+                    .font(.caption2)
+                    .foregroundStyle(.tint)
+            }
+        }
+        .buttonStyle(.borderless)
+        .accessibilityHint(Text(L10n.string("card.copy")))
     }
 }

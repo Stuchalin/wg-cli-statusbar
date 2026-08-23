@@ -10,6 +10,10 @@ let package = Package(
             name: "WGStatusBar",
             targets: ["WGStatusBar"]
         ),
+        .executable(
+            name: "WGStatusBarHelper",
+            targets: ["WGStatusBarHelper"]
+        ),
         .library(
             name: "WGStatusBarCore",
             targets: ["WGStatusBarCore"]
@@ -27,6 +31,11 @@ let package = Package(
             name: "WGStatusBar",
             dependencies: ["WGStatusBarCore"],
             path: "Sources/App"
+        ),
+        .executableTarget(
+            name: "WGStatusBarHelper",
+            dependencies: ["WGStatusBarCore"],
+            path: "Sources/Helper"
         ),
         .testTarget(
             name: "WGStatusBarTests",

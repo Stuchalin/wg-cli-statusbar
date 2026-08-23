@@ -179,7 +179,7 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(makeInterface("wg2", peers: []).isConnected)
     }
 
-    // MARK: - Модель: menuTitle
+    // MARK: - Модель: menuTitle и isAnyConnected
 
     func testMenuTitleWhenActiveAndInactive() {
         let connectedModel = WireGuardStatusModel(testing: [makeInterface("wg0", peers: [makeActivePeer("peer-a")])])
@@ -189,6 +189,10 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(connectedModel.menuTitle, L10n.string("menu.title.on"))
         XCTAssertEqual(disconnectedModel.menuTitle, L10n.string("menu.title.off"))
         XCTAssertEqual(emptyModel.menuTitle, L10n.string("menu.title.off"))
+
+        XCTAssertTrue(connectedModel.isAnyConnected)
+        XCTAssertFalse(disconnectedModel.isAnyConnected)
+        XCTAssertFalse(emptyModel.isAnyConnected)
     }
 
     /// Aging-хендшейк (−5 мин) — всё ещё «подключён»: green|orange дают active.
@@ -361,6 +365,10 @@ final class WGStatusBarTests: XCTestCase {
         waitUntil({ !model.isLoading && model.lastError != nil }, "ошибочный refresh должен завершиться с lastError")
 
         XCTAssertNotNil(model.lastError, "ошибка команды должна попасть в lastError")
+        // Чужая (не StatusFailure) ошибка раннера заворачивается в .generic с её текстом.
+        if case .generic = model.lastFailure {} else {
+            XCTFail("чужая ошибка раннера должна заворачиваться в .generic, получили \(String(describing: model.lastFailure))")
+        }
         XCTAssertEqual(model.interfaces.count, 1, "данные последнего успешного тика должны остаться")
         XCTAssertEqual(model.interfaces[0].displayName, "work-vpn")
 
@@ -369,6 +377,67 @@ final class WGStatusBarTests: XCTestCase {
 
         XCTAssertNil(model.lastError, "lastError живёт один цикл refresh")
         XCTAssertEqual(model.interfaces[0].name, "utun7", "успешный тик должен обновить данные")
+    }
+
+    // MARK: - Модель: мост типизированной ошибки в строку карточки
+
+    func testRefreshTypedFailureBridgesToLastErrorString() {
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .failure(StatusFailure.wgMissing),
+                .failure(StatusFailure.daemonOutdated),
+            ]),
+            tunnelNamer: MockTunnelNamer()
+        )
+
+        model.refresh()
+        waitUntil({ !model.isLoading && model.lastFailure != nil }, "refresh с типизированной ошибкой должен завершиться")
+
+        XCTAssertEqual(model.lastFailure, .wgMissing, "StatusFailure от раннера проходит в модель как есть")
+        XCTAssertEqual(model.lastError, L10n.string("error.wg_missing"), "карточка получает локализованную строку из lastFailure")
+
+        model.refresh()
+        waitUntil({ model.lastFailure == .daemonOutdated }, "второй refresh должен опубликовать daemonOutdated")
+
+        XCTAssertEqual(model.lastError, L10n.string("error.daemon_outdated"))
+    }
+
+    // MARK: - Модель: probe сокета и состояние сервиса
+
+    /// Легаси-перегрузка `init(commandRunner:tunnelNamer:)` держит probe сокета
+    /// всегда false — все существующие refresh-тесты идут через инжектированный
+    /// раннер, состояние сервиса остаётся absent (сокетного пути нет).
+    func testLegacyInitUsesInjectedRunnerAndStaysAbsent() {
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [
+                .success(makeDump([
+                    makeInterfaceDumpLine("utun3"),
+                    makePeerDumpLine(interfaceName: "utun3", handshakeSecondsAgo: 60),
+                ])),
+            ]),
+            tunnelNamer: MockTunnelNamer()
+        )
+
+        XCTAssertEqual(model.serviceState, .absent, "до первого тика состояние — absent")
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        XCTAssertEqual(model.interfaces[0].name, "utun3", "дамп приходит от инжектированного раннера")
+        XCTAssertEqual(model.serviceState, .absent, "без сокета состояние сервиса — absent")
+    }
+
+    // MARK: - Модель: ошибка установки сервиса в карточку
+
+    func testReportServiceFailureSurfacesGenericErrorForOneTick() {
+        // Единственный канал ошибок установки в карточку (stderr скрипта или
+        // сбой osascript): текст — в lastFailure/lastError, следующий refresh
+        // сотрёт (модель тестируется без таймера и тика).
+        let model = WireGuardStatusModel(testing: [])
+
+        model.reportServiceFailure("boom")
+
+        XCTAssertEqual(model.lastFailure, .generic("boom"))
+        XCTAssertEqual(model.lastError, "boom")
     }
 
     // MARK: - Гигиена ключей после удаления StatusMenuView
@@ -408,9 +477,9 @@ private final class StubCommandRunner: WGShowCommandRunning {
     }
 
     func runDump() async throws -> String {
-        lock.lock()
-        let result = results.isEmpty ? .success("") : results.removeFirst()
-        lock.unlock()
+        let result: Result<String, Error> = lock.withLock {
+            results.isEmpty ? .success("") : results.removeFirst()
+        }
 
         switch result {
         case .success(let output):
