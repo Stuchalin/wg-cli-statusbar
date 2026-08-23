@@ -182,8 +182,8 @@ private func legendToggled(to visible: Bool) {
 - Modify: `CLAUDE.md` (если описание перестало соответствовать коду)
 - Move: `docs/plans/20260824-fix-info-button-legend-jump.md` → `docs/plans/completed/`
 
-- [ ] обновить CLAUDE.md, если описание `StatusItemController`/карточки перестало соответствовать коду (легенда теперь хранится в контроллере)
-- [ ] переместить план в `docs/plans/completed/`
+- [x] обновить CLAUDE.md, если описание `StatusItemController`/карточки перестало соответствовать коду (легенда теперь хранится в контроллере) — буллет `StatusItemController` дополнен: владение `isLegendVisible` (переживает пересборки меню, посев через `initialLegendVisible`, отчёт через `onLegendChange`, замер на следующем проходе run loop)
+- [x] переместить план в `docs/plans/completed/`
 
 ## Post-Completion
 
