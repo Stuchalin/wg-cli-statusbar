@@ -477,9 +477,9 @@ private final class StubCommandRunner: WGShowCommandRunning {
     }
 
     func runDump() async throws -> String {
-        lock.lock()
-        let result = results.isEmpty ? .success("") : results.removeFirst()
-        lock.unlock()
+        let result: Result<String, Error> = lock.withLock {
+            results.isEmpty ? .success("") : results.removeFirst()
+        }
 
         switch result {
         case .success(let output):

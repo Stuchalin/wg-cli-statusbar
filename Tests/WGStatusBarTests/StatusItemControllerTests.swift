@@ -104,15 +104,11 @@ final class StatusItemControllerTests: XCTestCase {
         }
 
         func install() async {
-            lock.lock()
-            defer { lock.unlock() }
-            installCountStorage += 1
+            lock.withLock { installCountStorage += 1 }
         }
 
         func uninstall() async {
-            lock.lock()
-            defer { lock.unlock() }
-            uninstallCountStorage += 1
+            lock.withLock { uninstallCountStorage += 1 }
         }
     }
 
@@ -231,6 +227,23 @@ final class StatusItemControllerTests: XCTestCase {
             guard case .action(testCase.id, _, _, _, _) = entries[entries.count - 2] else {
                 return XCTFail("пункт сервиса в состоянии \(testCase.state) — сразу перед выходом")
             }
+        }
+    }
+
+    func testServiceActionMappingMatchesServiceState() {
+        // Тот же маппинг питает и сборку меню, и живое обновление пункта при
+        // открытом меню (`updateServiceItem`): состояние → действие + титул.
+        let cases: [(state: ServiceState, id: StatusMenuAction, titleKey: String)] = [
+            (.absent, .installService, "button.install_service"),
+            (.broken, .installService, "button.update_service"),
+            (.outdated, .installService, "button.update_service"),
+            (.installed, .uninstallService, "button.remove_service"),
+        ]
+
+        for testCase in cases {
+            let action = StatusMenuStructure.serviceAction(for: testCase.state)
+            XCTAssertEqual(action.id, testCase.id, "состояние \(testCase.state): действие")
+            XCTAssertEqual(action.title, L10n.string(testCase.titleKey), "состояние \(testCase.state): титул")
         }
     }
 

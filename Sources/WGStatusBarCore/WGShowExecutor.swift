@@ -23,11 +23,18 @@ public protocol WGShowExecuting {
 
 /// Общий доступ к запущенному ребёнку для таймаута и отмены задачи: `onCancel`
 /// бежит не в задаче исполнителя, запуск — в detached-задаче — доступ из
-/// разных потоков под локом.
-private final class ChildProcessHandle {
+/// разных потоков под локом. `internal` — для теста гонки register→cancel→run.
+internal final class ChildProcessHandle {
     private let lock = NSLock()
+    /// Grace эскалации SIGTERM → SIGKILL — тот же, что у таймаута:
+    /// игнорирующий TERM ребёнок не должен переживать и отмену.
+    private let killGrace: TimeInterval
     private var process: Process?
     private var cancelled = false
+
+    init(killGrace: TimeInterval) {
+        self.killGrace = killGrace
+    }
 
     /// Регистрирует процесс перед запуском; `false` — задача уже отменена,
     /// ребёнка запускать нельзя.
@@ -40,20 +47,25 @@ private final class ChildProcessHandle {
     }
 
     /// Отмена задачи: убить ребёнка, если он уже жив; kill несуществующему
-    /// pid безвреден, гонка с завершением процесса — тоже.
+    /// pid безвреден, гонка с завершением процесса — тоже. Дальше — как в
+    /// таймауте: не умерший от TERM добивается SIGKILL'ом через grace.
     func cancel() {
         lock.lock()
         defer { lock.unlock() }
+        guard !cancelled else { return }
         cancelled = true
-        if let process {
-            // Регистрация идёт до run(): у ещё не запущенного процесса pid == 0,
-            // а kill(0, SIGTERM) шлёт сигнал всей группе процессов демона.
-            // Сигнал — только живому ребёнку.
-            let pid = process.processIdentifier
-            if pid > 0 {
-                kill(pid, SIGTERM)
-            }
-        }
+        terminateChildLocked()
+    }
+
+    /// Повторная проверка после успешного run(): отмена в окне между
+    /// register и run() застала pid == 0 и ушла без сигнала — теперь ребёнок
+    /// запущен, останавливаем его, иначе он жил бы до собственного выхода
+    /// или таймаута вместо отмены.
+    func killIfCancelled() {
+        lock.lock()
+        defer { lock.unlock() }
+        guard cancelled else { return }
+        terminateChildLocked()
     }
 
     var isCancelled: Bool {
@@ -61,36 +73,75 @@ private final class ChildProcessHandle {
         defer { lock.unlock() }
         return cancelled
     }
+
+    /// TERM живому ребёнку + SIGKILL через grace; только под локом. У ещё не
+    /// запущенного процесса pid == 0, а kill(0, SIGTERM) шлёт сигнал всей
+    /// группе процессов демона — сигнал только настоящему pid ребёнка.
+    private func terminateChildLocked() {
+        guard let process else { return }
+        let pid = process.processIdentifier
+        guard pid > 0 else { return }
+        kill(pid, SIGTERM)
+        scheduleSigkill(process: process, pid: pid)
+    }
+
+    /// SIGKILL через grace; проверка `isRunning` сужает гонку переиспользования
+    /// pid уже завершившегося процесса.
+    private func scheduleSigkill(process: Process, pid: pid_t) {
+        let grace = killGrace
+        DispatchQueue.global().asyncAfter(deadline: .now() + grace) {
+            if process.isRunning {
+                kill(pid, SIGKILL)
+            }
+        }
+    }
 }
 
 /// Продакшн-исполнитель демона: резолвит бинарь `wg` через `WGBinaryResolver`
 /// (промах → `wgMissing`, процесс не запускается; промах не кэшируется —
 /// `brew install wireguard-tools` подхватится следующим запросом), запускает
-/// его с литеральными аргументами и дедлайном, зависший ребёнок убивается.
-/// Кэш резолвера — mutating, поэтому класс, а не структура: протокол не даёт
-/// `mutating`; последовательный accept-loop демона — единственный клиент,
-/// блокировки не нужны. Сырой вывод содержит секреты — не логировать.
+/// его с литеральными аргументами и жёстким дедлайном: TERM в `timeout`,
+/// KILL ещё через `killGrace`, дальше ожидание ограничено — зависший ребёнок
+/// не подвешивает последовательный accept-loop демона. Кэш резолвера —
+/// mutating, поэтому класс, а не структура: протокол не даёт `mutating`;
+/// последовательный accept-loop демона — единственный клиент, блокировки
+/// не нужны. Сырой вывод содержит секреты — не логировать.
 public final class WGShowExecutor: WGShowExecuting {
     private var resolver: WGBinaryResolver
     private let arguments: [String]
     private let timeout: TimeInterval
+    private let killGrace: TimeInterval
+
+    /// Продакшн-дедлайн выполнения wg (SIGTERM). Худший случай бюджета ответа
+    /// демона — `defaultTimeout + 2 * defaultKillGrace` — обязан с запасом
+    /// укладываться в клиентский дедлайн `SocketWGShowRunner.defaultTimeout`:
+    /// иначе TERM-игнорирующий wg встречает тишину до клиентского таймаута
+    /// (`.commandTimeout` → ложное `broken` у сервиса) вместо err-ответа демона.
+    public static let defaultTimeout: TimeInterval = 3.0
+    /// Продакшн-grace эскалации: TERM → KILL и KILL → отказ от ожидания.
+    public static let defaultKillGrace: TimeInterval = 0.5
 
     /// - Parameters:
     ///   - resolver: резолвер бинаря `wg` (инжектируемая FS — для тестов).
     ///   - arguments: аргументы запуска — литеральные, без шелла; инжектируются
     ///     для тестовых стабов.
-    ///   - timeout: дедлайн выполнения wg; клиентский таймаут (5 c) больше,
-    ///     чтобы демон успел ответить `err` вместо обрыва по тишины.
+    ///   - timeout: дедлайн выполнения wg (SIGTERM); полный бюджет ответа
+    ///     (`timeout + 2 * killGrace`) держите ниже клиентского дедлайна —
+    ///     демон успевает ответить `err` даже TERM-игнорирующему случаю.
+    ///   - killGrace: срок между SIGTERM и SIGKILL (и между SIGKILL и отказом
+    ///     от ожидания) — инжектируется коротким в тестах.
     public init(
         resolver: WGBinaryResolver = WGBinaryResolver(
             fileExists: { FileManager.default.fileExists(atPath: $0) }
         ),
         arguments: [String] = ["show", "all", "dump"],
-        timeout: TimeInterval = 4.0
+        timeout: TimeInterval = WGShowExecutor.defaultTimeout,
+        killGrace: TimeInterval = WGShowExecutor.defaultKillGrace
     ) {
         self.resolver = resolver
         self.arguments = arguments
         self.timeout = timeout
+        self.killGrace = killGrace
     }
 
     public func runDump() async throws -> String {
@@ -98,12 +149,13 @@ public final class WGShowExecutor: WGShowExecuting {
             throw WGShowExecutorError.wgMissing
         }
 
-        // Блокирующий waitUntilExit уходит с кооперативного пула; отмена
-        // задачи (клиент ушёл по EOF) будит его сигналом ребёнку.
-        let handle = ChildProcessHandle()
+        // Блокирующее ожидание уходит с кооперативного пула; отмена задачи
+        // (клиент ушёл по EOF) будит его сигналом ребёнку.
+        let handle = ChildProcessHandle(killGrace: killGrace)
         let executableURL = URL(fileURLWithPath: binaryPath)
         let arguments = self.arguments
         let timeout = self.timeout
+        let killGrace = self.killGrace
         return try await withTaskCancellationHandler {
             try await withCheckedThrowingContinuation { continuation in
                 Task.detached {
@@ -112,7 +164,8 @@ public final class WGShowExecutor: WGShowExecuting {
                             handle: handle,
                             executableURL: executableURL,
                             arguments: arguments,
-                            timeout: timeout
+                            timeout: timeout,
+                            killGrace: killGrace
                         )
                         continuation.resume(returning: output)
                     } catch {
@@ -129,7 +182,8 @@ public final class WGShowExecutor: WGShowExecuting {
         handle: ChildProcessHandle,
         executableURL: URL,
         arguments: [String],
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        killGrace: TimeInterval
     ) throws -> String {
         let process = Process()
         process.executableURL = executableURL
@@ -152,8 +206,10 @@ public final class WGShowExecutor: WGShowExecuting {
         var timedOut = false
         var exited = false
 
-        // Регистрация до run(): отмена, пришедшая в микросекунды старта,
-        // не должна потерять ребёнка.
+        // Регистрация до run(): отмена, пришедшая до запуска, останавливает
+        // ребёнка ещё до его рождения. Но отмена в окне между register и run
+        // видит pid == 0 и не может сигналить — повторная проверка после
+        // запуска добивает уже живого ребёнка.
         guard handle.register(process) else {
             throw CancellationError()
         }
@@ -162,6 +218,7 @@ public final class WGShowExecutor: WGShowExecuting {
         } catch {
             throw WGShowExecutorError.wgFailed(error.localizedDescription)
         }
+        handle.killIfCancelled()
 
         // Дренирование стартует только после успешного запуска: при броске
         // run() write-концы пайпов остаются открытыми у нас, и читатели
@@ -177,6 +234,9 @@ public final class WGShowExecutor: WGShowExecuting {
             drained.leave()
         }
 
+        // Двухступенчатый таймаут: TERM в дедлайн, KILL ещё через killGrace —
+        // wg, игнорирующий или ловящий TERM, не должен подвешивать
+        // последовательный accept-loop демона до собственного выхода.
         let timeoutTask = DispatchWorkItem {
             let shouldTerminate = stateQueue.sync { () -> Bool in
                 guard !exited, process.isRunning else { return false }
@@ -189,12 +249,36 @@ public final class WGShowExecutor: WGShowExecuting {
                 kill(process.processIdentifier, SIGTERM)
             }
         }
+        let killTask = DispatchWorkItem {
+            let shouldKill = stateQueue.sync { () -> Bool in
+                guard !exited, process.isRunning else { return false }
+                return true
+            }
+            if shouldKill {
+                kill(process.processIdentifier, SIGKILL)
+            }
+        }
         process.terminationHandler = { _ in
             stateQueue.sync { exited = true }
             timeoutTask.cancel()
+            killTask.cancel()
         }
 
         DispatchQueue.global().asyncAfter(deadline: .now() + timeout, execute: timeoutTask)
+        DispatchQueue.global().asyncAfter(deadline: .now() + timeout + killGrace, execute: killTask)
+
+        // Ожидание выхода ограничено и за SIGKILL'ом (ещё killGrace): неумирающий
+        // даже от KILL ребёнок — непрерываемый сон в ядре — не должен подвешивать
+        // демон; отдаём таймаут, оставив живого ребёнка и дренирующие потоки
+        // системе (деградация патологического случая, не вечный клин демона).
+        let waitDeadline = Date().addingTimeInterval(timeout + 2 * killGrace)
+        while !stateQueue.sync(execute: { exited }) {
+            if Date() >= waitDeadline {
+                throw WGShowExecutorError.timedOut
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        // По факту выхода мгновенен и гарантирует reaping зомби.
         process.waitUntilExit()
         drained.wait()
 

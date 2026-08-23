@@ -15,6 +15,7 @@
 "error.daemon_outdated" = "Служба-помощник устарела — обновите её из меню";
 "error.service_unreachable" = "Служба-помощник недоступна";
 "error.install_script_missing" = "Скрипт установки сервиса не найден — запустите приложение из бандла .app";
+"error.helper_binary_missing" = "Бинарь хелпера не найден в бандле приложения — пересоберите .app";
 "card.copy" = "Копировать";
 "card.copied" = "Скопировано";
 "ago.seconds" = "%@ с назад";

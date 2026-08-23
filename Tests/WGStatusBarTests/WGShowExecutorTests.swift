@@ -6,11 +6,13 @@ import XCTest
 /// единственным кандидатом `/bin/zsh`, аргументы и таймаут — инъекцией.
 /// Проверяется сырой вывод без санитизации (секреты — забота `DaemonServer`),
 /// `wgMissing` без запуска процесса, классификация ненулевого exit, таймаут
-/// с убийством процесса и отмена задачи.
+/// с убийством процесса, отмена задачи и инвариант таймингов: бюджет
+/// исполнителя укладывается в клиентский дедлайн сокет-раннера.
 final class WGShowExecutorTests: XCTestCase {
     private func makeExecutor(
         arguments: [String],
         timeout: TimeInterval = 5,
+        killGrace: TimeInterval = 2,
         binaryExists: Bool = true
     ) -> WGShowExecutor {
         WGShowExecutor(
@@ -19,7 +21,8 @@ final class WGShowExecutorTests: XCTestCase {
                 fileExists: { _ in binaryExists }
             ),
             arguments: arguments,
-            timeout: timeout
+            timeout: timeout,
+            killGrace: killGrace
         )
     }
 
@@ -104,6 +107,84 @@ final class WGShowExecutorTests: XCTestCase {
         )
     }
 
+    func testTimeoutEscalatesToSigkillWhenChildIgnoresTerm() async throws {
+        // Стаб игнорирует SIGTERM (`trap '' TERM`): таймаут обязан быть жёстким —
+        // через killGrace следует SIGKILL, иначе игнорирующий TERM wg подвешивал
+        // бы последовательный accept-loop демона до собственного выхода.
+        let pidFile = NSTemporaryDirectory().appending("wgstatusbar-executor-termtrap-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let executor = makeExecutor(
+            arguments: ["-f", "-c", "trap '' TERM; printf '%s\\n' $$ > \(pidFile); sleep 30"],
+            timeout: 0.3,
+            killGrace: 0.3
+        )
+
+        do {
+            _ = try await executor.runDump()
+            XCTFail("игнорирующий TERM процесс должен погибнуть по таймауту")
+        } catch {
+            XCTAssertEqual(error as? WGShowExecutorError, .timedOut)
+        }
+
+        let pidData = try String(contentsOfFile: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(Int32(pidData), "стаб должен записать свой pid")
+        XCTAssertTrue(
+            Self.waitUntilProcessDies(pid, within: 3),
+            "процесс \(pid) должен быть убит SIGKILL после игнорирования TERM"
+        )
+    }
+
+    func testProductionWorstCaseBudgetFitsUnderClientDeadline() {
+        // Инвариант таймингов: полный бюджет ответа демона (TERM → KILL →
+        // отказ от ожидания) меньше клиентского дедлайна с запасом на джиттер
+        // планировщика и накладные расходы демона — иначе TERM-игнорирующий wg
+        // встречает тишину клиента (commandTimeout → ложное broken) вместо
+        // err-ответа демона.
+        let worstCase = WGShowExecutor.defaultTimeout + 2 * WGShowExecutor.defaultKillGrace
+        XCTAssertLessThanOrEqual(
+            worstCase,
+            SocketWGShowRunner.defaultTimeout - 0.5,
+            "худший случай демона (\(worstCase) c) обязан укладываться в клиентский дедлайн "
+                + "(\(SocketWGShowRunner.defaultTimeout) c) с запасом ≥ 0.5 c"
+        )
+    }
+
+    func testTermIgnoringChildGetsDaemonErrBeforeClientDeadline() async throws {
+        // Socket-level регрессия с продакшн-таймингами: стаб wg игнорирует
+        // SIGTERM — самый долгий путь исполнителя (TERM в таймаут, KILL ещё
+        // через killGrace). Демон обязан успеть ответить `err wg-failed
+        // wg timed out` до клиентского дедлайна: клиент, отвалившийся по
+        // тишине, показывает commandTimeout и помечает здоровый сервис broken.
+        let socketPath = "/tmp/wgstatusbar-executor-budget-"
+            + UUID().uuidString.prefix(8)
+            + ".sock"
+        defer { try? FileManager.default.removeItem(atPath: socketPath) }
+
+        let executor = WGShowExecutor(
+            resolver: WGBinaryResolver(searchPaths: ["/bin/zsh"], fileExists: { _ in true }),
+            arguments: ["-f", "-c", "trap '' TERM; sleep 30"]
+        )
+        let server = DaemonServer(executor: executor, socketPath: socketPath)
+        let serverTask = Task.detached { try await server.run() }
+        defer { serverTask.cancel() }
+        try Self.waitUntilListening(socketPath: socketPath)
+
+        // Дефолты обеих сторон — продакшн: 3 c TERM + 0.5 c grace ×2 против 5 c клиента.
+        let runner = SocketWGShowRunner(socketPath: socketPath)
+
+        do {
+            _ = try await runner.runDump()
+            XCTFail("TERM-игнорирующий стаб должен дать err-ответ демона")
+        } catch let failure as StatusFailure {
+            XCTAssertEqual(
+                failure,
+                .generic("wg timed out"),
+                "клиент должен получить err-ответ демона до своего дедлайна, а не \(failure)"
+            )
+        }
+    }
+
     func testTaskCancellationThrowsCancellationErrorAndKillsChild() async throws {
         // Отмена задачи (клиент ушёл по EOF посреди запроса) обязана убить
         // ребёнка и бросить CancellationError, а не висеть до таймаута wg.
@@ -135,6 +216,39 @@ final class WGShowExecutorTests: XCTestCase {
         XCTAssertTrue(
             Self.waitUntilProcessDies(pid, within: 3),
             "процесс \(pid) должен быть убит по отмене задачи"
+        )
+    }
+
+    func testCancelBetweenRegisterAndRunKillsLaunchedChild() throws {
+        // Точное чередование гонки register → cancel → run: cancel видит
+        // pid == 0 и не может сигналить; повторная проверка после запуска
+        // обязана убить ребёнка — иначе отмена в окне старта терялась, и wg
+        // жил бы до собственного выхода или таймаута вместо отмены.
+        // pid берём у самого Process — TERM после killIfCancelled приходит
+        // раньше, чем стаб успел бы записать pid-файл.
+        let handle = ChildProcessHandle(killGrace: 0.3)
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/bin/zsh")
+        process.arguments = ["-f", "-c", "sleep 30"]
+
+        XCTAssertTrue(handle.register(process), "отмены ещё не было — регистрация обязана пройти")
+        handle.cancel()  // pid == 0: сигнал невозможен, окно гонки
+
+        try process.run()
+        handle.killIfCancelled()
+
+        // Без убийства стаб спит 30 с — ждём смерти с дедлайном, не блокируя тест.
+        let deathDeadline = Date().addingTimeInterval(3)
+        while process.isRunning && Date() < deathDeadline {
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        XCTAssertFalse(process.isRunning, "ребёнок должен быть убит после отмены в окне register→run")
+        process.waitUntilExit()  // reaping зомби
+
+        let pid = process.processIdentifier
+        XCTAssertTrue(
+            Self.waitUntilProcessDies(pid, within: 3),
+            "процесс \(pid) должен быть мёртв после отмены в окне register→run"
         )
     }
 
@@ -184,5 +298,23 @@ final class WGShowExecutorTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.05)
         }
         return false
+    }
+
+    /// Ждёт настоящего listen-состояния сервера (файл сокета появляется на
+    /// bind — раньше listen, connect в этом окне ловит ECONNREFUSED).
+    private static func waitUntilListening(socketPath: String, timeout: TimeInterval = 5) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        while Date() < deadline {
+            let fd = socket(AF_UNIX, SOCK_STREAM, 0)
+            if fd >= 0 {
+                let connected = withUnixSocketAddress(path: socketPath) { address, length in
+                    connect(fd, address, length)
+                }
+                close(fd)
+                if connected == 0 { return }
+            }
+            Thread.sleep(forTimeInterval: 0.01)
+        }
+        XCTFail("сервер не начал слушать \(socketPath) за \(timeout) с")
     }
 }

@@ -80,13 +80,20 @@ enum StatusMenuStructure {
     /// или устарел — обновить (скрипт установки идемпотентен, действие то же);
     /// жив — удалить.
     private static func serviceEntry(for state: ServiceState) -> Entry {
+        let action = serviceAction(for: state)
+        return .action(id: action.id, title: action.title, keyEquivalent: "", modifiers: [], isEnabled: true)
+    }
+
+    /// Действие и заголовок пункта сервиса из состояния — единый источник для
+    /// сборки меню и живого обновления пункта при открытом меню.
+    static func serviceAction(for state: ServiceState) -> (id: StatusMenuAction, title: String) {
         switch state {
         case .absent:
-            return .action(id: .installService, title: L10n.string("button.install_service"), keyEquivalent: "", modifiers: [], isEnabled: true)
+            return (.installService, L10n.string("button.install_service"))
         case .broken, .outdated:
-            return .action(id: .installService, title: L10n.string("button.update_service"), keyEquivalent: "", modifiers: [], isEnabled: true)
+            return (.installService, L10n.string("button.update_service"))
         case .installed:
-            return .action(id: .uninstallService, title: L10n.string("button.remove_service"), keyEquivalent: "", modifiers: [], isEnabled: true)
+            return (.uninstallService, L10n.string("button.remove_service"))
         }
     }
 }
@@ -128,8 +135,8 @@ enum StatusMenuFactory {
 ///
 /// Меню пересобирается в `menuNeedsUpdate` — при каждом открытии данные свежие.
 /// Контент карточки обновляется сам (`@ObservedObject` модели), контроллер
-/// реагирует на `objectWillChange` иконкой, состоянием пункта «Обновить»
-/// и перемером высоты карточки.
+/// реагирует на `objectWillChange` иконкой, состоянием пункта «Обновить»,
+/// пунктом сервиса (установить/обновить/удалить) и перемером высоты карточки.
 ///
 /// Создавать на главном потоке (единственный владелец — AppDelegate приложения).
 public final class StatusItemController: NSObject, NSMenuDelegate {
@@ -177,6 +184,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     private func modelDidChange() {
         updateStatusIcon()
         updateRefreshItemEnabledState()
+        updateServiceItem()
         resizeCardToContent()
     }
 
@@ -194,6 +202,22 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         guard let menu else { return }
         for item in menu.items where item.tag == StatusMenuAction.refresh.rawValue {
             item.isEnabled = !model.isLoading
+        }
+    }
+
+    /// Состояние сервиса тоже выводится на каждом тике и может смениться при
+    /// открытом меню (демон поднялся или умер): заголовок и действие пункта
+    /// синхронизируем живьём тем же маппингом, что и в сборке меню.
+    private func updateServiceItem() {
+        guard let menu else { return }
+        let action = StatusMenuStructure.serviceAction(for: model.serviceState)
+        let serviceTags: Set<Int> = [
+            StatusMenuAction.installService.rawValue,
+            StatusMenuAction.uninstallService.rawValue,
+        ]
+        for item in menu.items where serviceTags.contains(item.tag) {
+            item.tag = action.id.rawValue
+            item.title = action.title
         }
     }
 

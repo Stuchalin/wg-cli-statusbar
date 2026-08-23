@@ -219,7 +219,7 @@ final class SocketWGShowRunnerTests: XCTestCase {
         ]
         for testCase in cases {
             executor.configure(error: testCase.thrown)
-            try await assertRunDumpThrows(testCase.expected, runner: runner)
+            await assertRunDumpThrows(testCase.expected, runner: runner)
         }
     }
 
@@ -229,10 +229,10 @@ final class SocketWGShowRunnerTests: XCTestCase {
         // Файл сокета есть, слушателя нет (демон убит без очистки).
         let stalePath = makeSocketPath()
         try makeStaleSocketFile(path: stalePath)
-        try await assertRunDumpThrows(.connectionRefused, runner: SocketWGShowRunner(socketPath: stalePath))
+        await assertRunDumpThrows(.connectionRefused, runner: SocketWGShowRunner(socketPath: stalePath))
 
         // Пути нет вовсе — демона не устанавливали.
-        try await assertRunDumpThrows(
+        await assertRunDumpThrows(
             .connectionRefused,
             runner: SocketWGShowRunner(socketPath: "/tmp/wgstatusbar-socketrunnertests-missing.sock")
         )
@@ -248,7 +248,7 @@ final class SocketWGShowRunnerTests: XCTestCase {
 
         let runner = SocketWGShowRunner(socketPath: socketPath, timeout: 0.5)
         let started = Date()
-        try await assertRunDumpThrows(.commandTimeout, runner: runner)
+        await assertRunDumpThrows(.commandTimeout, runner: runner)
 
         let elapsed = Date().timeIntervalSince(started)
         XCTAssertGreaterThanOrEqual(elapsed, 0.4, "тишина должна длиться до клиентского дедлайна")
@@ -260,11 +260,11 @@ final class SocketWGShowRunnerTests: XCTestCase {
     func testGarbageResponseAndInstantEOFMapToBadResponse() async throws {
         let garbagePath = makeSocketPath()
         try serveOneConnection(path: garbagePath, response: "definitely not a protocol header\n")
-        try await assertRunDumpThrows(.badResponse, runner: SocketWGShowRunner(socketPath: garbagePath))
+        await assertRunDumpThrows(.badResponse, runner: SocketWGShowRunner(socketPath: garbagePath))
 
         let eofPath = makeSocketPath()
         try serveOneConnection(path: eofPath, response: nil)
-        try await assertRunDumpThrows(.badResponse, runner: SocketWGShowRunner(socketPath: eofPath))
+        await assertRunDumpThrows(.badResponse, runner: SocketWGShowRunner(socketPath: eofPath))
     }
 
     // MARK: - версии заголовка → daemonOutdated
@@ -283,7 +283,7 @@ final class SocketWGShowRunnerTests: XCTestCase {
         for response in cases {
             let socketPath = makeSocketPath()
             try serveOneConnection(path: socketPath, response: response)
-            try await assertRunDumpThrows(
+            await assertRunDumpThrows(
                 .daemonOutdated,
                 runner: SocketWGShowRunner(socketPath: socketPath)
             )

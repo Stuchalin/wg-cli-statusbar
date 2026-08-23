@@ -61,7 +61,8 @@ public final class InstallerService {
 
     /// Путь хелпера в бандле приложения — туда его кладёт build-app.sh.
     /// В dev-запуске голого бинаря может не существовать; установка падает
-    /// раньше, на отсутствующем скрипте, — путь тогда не используется.
+    /// раньше, на отсутствующем скрипте, а в неполной сборке .app — на
+    /// отсутствующем бинаре (проверка в `command`).
     private static func defaultBinaryPath(in bundle: Bundle) -> String {
         bundle.bundleURL.appendingPathComponent("Contents/MacOS/WGStatusBarHelper").path
     }
@@ -126,11 +127,22 @@ public final class InstallerService {
         return .failure(trimmed.isEmpty ? "exit code \(exitCode)" : trimmed)
     }
 
-    /// Предстартовая сборка: скрипта нет (dev-запуск без .app) —
-    /// локализованная ошибка до osascript; иначе argv.
-    static func command(scriptPath: String?, binaryPath: String?) -> PreparedInstallCommand {
+    /// Предстартовая сборка: скрипта нет (dev-запуск без .app) или бинаря
+    /// хелпера нет в бандле (неполная сборка .app) — локализованная ошибка
+    /// до osascript: админ-промпт не должен открываться под гарантированно
+    /// падающую в root-скрипте команду. Проверку существования бинаря делает
+    /// вызывающий (инъекция для тестов) — функция остаётся чистой; uninstall
+    /// бинарь не передаёт, проверка его не касается.
+    static func command(
+        scriptPath: String?,
+        binaryPath: String?,
+        binaryExists: Bool = true
+    ) -> PreparedInstallCommand {
         guard let scriptPath else {
             return .failure(L10n.string("error.install_script_missing"))
+        }
+        if binaryPath != nil, !binaryExists {
+            return .failure(L10n.string("error.helper_binary_missing"))
         }
         return .argv(osascriptCommand(scriptPath: scriptPath, binaryPath: binaryPath))
     }
@@ -138,14 +150,20 @@ public final class InstallerService {
     // MARK: - Запуск (промпт не автоматизируется)
 
     public func install() async {
-        await run(scriptPath: Self.installScriptPath(bundle: bundle), binaryPath: binaryPath)
+        await run(
+            scriptPath: Self.installScriptPath(bundle: bundle),
+            binaryPath: binaryPath,
+            // Префлайт до привилегированной границы: бинаря в бандле нет —
+            // промпт не открываем, root-скрипт всё равно упал бы на `[ -f ]`.
+            binaryExists: binaryPath.map { FileManager.default.fileExists(atPath: $0) } ?? true
+        )
     }
 
     public func uninstall() async {
         await run(scriptPath: Self.uninstallScriptPath(bundle: bundle), binaryPath: nil)
     }
 
-    private func run(scriptPath: String?, binaryPath: String?) async {
+    private func run(scriptPath: String?, binaryPath: String?, binaryExists: Bool = true) async {
         // Повторный вызов, пока идёт первый (промпт висит, osascript кэширует
         // авторизацию ~5 минут и вторая копия стартует сразу) — тихий no-op:
         // два параллельных install-скрипта конкурировали бы за cp в один dest
@@ -154,7 +172,7 @@ public final class InstallerService {
         defer { endRunClaim() }
 
         let argv: [String]
-        switch Self.command(scriptPath: scriptPath, binaryPath: binaryPath) {
+        switch Self.command(scriptPath: scriptPath, binaryPath: binaryPath, binaryExists: binaryExists) {
         case .failure(let message):
             await MainActor.run { onFailure?(message) }
             return

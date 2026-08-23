@@ -52,7 +52,13 @@ public struct SocketWGShowRunner: WGShowCommandRunning {
     private let socketPath: String
     private let timeout: TimeInterval
 
-    public init(socketPath: String, timeout: TimeInterval = 5.0) {
+    /// Продакшн-дедлайн полного обмена (connect+send+чтение до EOF). Больше
+    /// худшего случая бюджета демона (`WGShowExecutor.defaultTimeout +
+    /// 2 * defaultKillGrace`): зависший wg обязан успеть получить err-ответ
+    /// демона, а не таймаут клиента по тишине.
+    public static let defaultTimeout: TimeInterval = 5.0
+
+    public init(socketPath: String, timeout: TimeInterval = SocketWGShowRunner.defaultTimeout) {
         self.socketPath = socketPath
         self.timeout = timeout
     }

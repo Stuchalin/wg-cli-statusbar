@@ -157,6 +157,37 @@ final class InstallerServiceTests: XCTestCase {
         )
     }
 
+    func testCommandWithMissingBinaryFailsWithLocalizedMessage() {
+        // Неполная сборка .app: скрипт есть, бинаря хелпера нет — ошибка до
+        // osascript, админ-промпт под гарантированно падающую команду не
+        // открывается. Проверка существования — на вызывающем, функция чистая.
+        let result = InstallerService.command(
+            scriptPath: "/tmp/app/Contents/Resources/install-daemon.sh",
+            binaryPath: "/tmp/app/Contents/MacOS/WGStatusBarHelper",
+            binaryExists: false
+        )
+
+        switch result {
+        case .failure(let message):
+            XCTAssertEqual(message, L10n.string("error.helper_binary_missing"))
+        case .argv:
+            XCTFail("без бинаря хелпера команда собираться не должна")
+        }
+    }
+
+    func testCommandWithoutBinaryPathSkipsBinaryCheck() {
+        // Uninstall бинарь не передаёт: проверка его не касается, argv собирается.
+        let result = InstallerService.command(
+            scriptPath: "/tmp/app/Contents/Resources/uninstall-daemon.sh",
+            binaryPath: nil,
+            binaryExists: false
+        )
+
+        guard case .argv = result else {
+            return XCTFail("uninstall без --binary не зависит от проверки бинаря")
+        }
+    }
+
     // MARK: - Инстанс: колбэки успеха/сбоя (запуск osascript инжектирован)
 
     func testInstallWithoutScriptReportsFailureAndSkipsOsaScript() async throws {
@@ -178,6 +209,28 @@ final class InstallerServiceTests: XCTestCase {
         await installer.install()
 
         XCTAssertEqual(failureMessage, L10n.string("error.install_script_missing"))
+        XCTAssertEqual(successCount, 0)
+    }
+
+    func testInstallWithoutBinaryReportsFailureAndSkipsOsaScript() async throws {
+        // Неполная сборка .app: скрипты на месте, бинаря хелпера в
+        // Contents/MacOS нет — префлайт до osascript, промпт не открывается.
+        let appURL = try makeFakeAppBundle(withScripts: true, withBinary: false)
+        defer { try? FileManager.default.removeItem(at: appURL) }
+        let bundle = try XCTUnwrap(Bundle(url: appURL))
+        let installer = InstallerService(bundle: bundle, runOsa: { _ in
+            XCTFail("без бинаря хелпера osascript запускаться не должен")
+            return .failure("unexpected osascript run")
+        })
+
+        var failureMessage: String?
+        var successCount = 0
+        installer.onFailure = { failureMessage = $0 }
+        installer.onSuccess = { successCount += 1 }
+
+        await installer.install()
+
+        XCTAssertEqual(failureMessage, L10n.string("error.helper_binary_missing"))
         XCTAssertEqual(successCount, 0)
     }
 
@@ -256,8 +309,9 @@ final class InstallerServiceTests: XCTestCase {
     // MARK: - Фикстура фейкового .app
 
     /// Собирает в tmp структуру настоящего .app: Contents/Info.plist и, по
-    /// флагу, оба скрипта в Contents/Resources — туда их кладёт build-app.sh.
-    private func makeFakeAppBundle(withScripts: Bool) throws -> URL {
+    /// флагам, оба скрипта в Contents/Resources и бинарь хелпера в
+    /// Contents/MacOS — туда их кладёт build-app.sh.
+    private func makeFakeAppBundle(withScripts: Bool, withBinary: Bool = true) throws -> URL {
         let appURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("InstallerServiceTests-\(UUID().uuidString).app")
         let contentsURL = appURL.appendingPathComponent("Contents")
@@ -276,6 +330,11 @@ final class InstallerServiceTests: XCTestCase {
                 try "#!/bin/sh\n".data(using: .utf8)?
                     .write(to: resourcesURL.appendingPathComponent(name))
             }
+        }
+        if withBinary {
+            let macosURL = contentsURL.appendingPathComponent("MacOS")
+            try FileManager.default.createDirectory(at: macosURL, withIntermediateDirectories: true)
+            try Data().write(to: macosURL.appendingPathComponent("WGStatusBarHelper"))
         }
         return appURL
     }
