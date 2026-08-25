@@ -15,6 +15,9 @@
 "error.wg_missing" = "WireGuard CLI is not installed";
 "error.daemon_outdated" = "Helper service is outdated — update it from the menu";
 "error.service_unreachable" = "Helper service is unreachable";
+"error.wgquick_missing" = "WireGuard wg-quick tool is not installed";
+"error.tunnel_not_found" = "Tunnel config not found";
+"error.tunnel_op_failed" = "Tunnel operation failed";
 "error.install_script_missing" = "Service install script is missing — run the app from its .app bundle";
 "error.helper_binary_missing" = "Helper binary is missing from the app bundle — rebuild the .app";
 "card.copy" = "Copy";
