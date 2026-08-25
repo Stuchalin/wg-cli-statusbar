@@ -217,6 +217,11 @@ public struct SocketWGShowRunner: WGShowCommandRunning {
         case .err(_, _, .wgFailed, let detail):
             // Демон всегда прикладывает деталь; пустая — деградируем в общую строку.
             throw StatusFailure.generic(detail ?? L10n.string("error.service_unreachable"))
+        case .err(_, _, .quickMissing, let detail), .err(_, _, .tunnelNotFound, let detail):
+            // Коды туннельных операций: на wire приходят без детали (stderr-хвост
+            // wg-quick остаётся в логе демона). Временный маппинг до Task 5 —
+            // финальные локализованные сообщения вводит SocketTunnelClient.
+            throw StatusFailure.generic(detail ?? L10n.string("error.service_unreachable"))
         }
     }
 }

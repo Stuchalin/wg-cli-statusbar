@@ -56,13 +56,13 @@
 ## Implementation Steps
 
 ### Task 1: Протокол — новые запросы, коды ошибок, bump build
-- [ ] `HelperProtocol.swift`: `HelperRequest` += `.list`, `.up(String)`, `.down(String)`; `encode` → `list\n`, `up <name>\n`, `down <name>\n`
-- [ ] `HelperResponseCode` += `.quickMissing` (wire `wg-quick-missing`), `.tunnelNotFound` (wire `tunnel-not-found`); `decode` понимает оба кода в `err`
-- [ ] `decode`: убедиться, что `ok` с payload-списком имён (каждое с `\n`) и `ok` с пустым payload проходят существующие правила (терминатор заголовка, dump пустой или с `\n`) — докомментировать в doc-комментарии
-- [ ] минимальная обработка новых кодов в `SocketWGShowRunner.interpret` (его switch по `err`-кодам исчерпывающий — без правки таргет не скомпилируется; временно → `.generic`, финальный маппинг уточнит Task 5)
-- [ ] bump `helperBuildNumber` 8 → 9 (helper-код меняется; протокол остаётся 1)
-- [ ] тесты `HelperProtocolTests`: round-trip encode трёх новых запросов; decode `ok` с payload-списком и `ok` пустым; decode `err` с новыми кодами (+ деталь); отрицательные кейсы (мусор, `ok` с лишними токенами)
-- [ ] полный сьют зелёный
+- [x] `HelperProtocol.swift`: `HelperRequest` += `.list`, `.up(String)`, `.down(String)`; `encode` → `list\n`, `up <name>\n`, `down <name>\n`
+- [x] `HelperResponseCode` += `.quickMissing` (wire `wg-quick-missing`), `.tunnelNotFound` (wire `tunnel-not-found`); `decode` понимает оба кода в `err`
+- [x] `decode`: убедиться, что `ok` с payload-списком имён (каждое с `\n`) и `ok` с пустым payload проходят существующие правила (терминатор заголовка, dump пустой или с `\n`) — докомментировать в doc-комментарии
+- [x] минимальная обработка новых кодов в `SocketWGShowRunner.interpret` (его switch по `err`-кодам исчерпывающий — без правки таргет не скомпилируется; временно → `.generic`, финальный маппинг уточнит Task 5)
+- [x] bump `helperBuildNumber` 8 → 9 (helper-код меняется; протокол остаётся 1)
+- [x] тесты `HelperProtocolTests`: round-trip encode трёх новых запросов; decode `ok` с payload-списком и `ok` пустым; decode `err` с новыми кодами (+ деталь); отрицательные кейсы (мусор, `ok` с лишними токенами)
+- [x] полный сьют зелёный
 
 ### Task 2: Общий child-process runner + `WGQuickExecutor` (демон)
 - [ ] извлечь из `WGShowExecutor.runWGSync` переиспользуемый internal-раннер `runChildProcess(executable:arguments:environment:timeout:killGrace:)` (TERM→KILL→ограниченное ожидание, drain пайпов, `ChildProcessHandle`); контракт: возвращает сырой результат `{ stdout, stderr, terminationStatus, timedOut }`, классификация ошибок — у вызывающего (`WGShowExecutor`/`WGQuickExecutor` переводят в свои типы; типоспецифичные ошибки в раннер не утекают); `WGShowExecutor` переводится на раннер без изменения поведения — существующие `WGShowExecutorTests` остаются зелёными
