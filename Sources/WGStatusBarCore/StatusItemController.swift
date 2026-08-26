@@ -74,8 +74,10 @@ enum StatusMenuStructure {
     /// строки] → разделитель → Сервис (по состоянию) → Выход.
     /// `refreshEnabled = false`, пока идёт refresh (спиннер в карточке);
     /// туннельная операция в полёте дополнительно отключает «Обновить»
-    /// (подавленный тик — молчаливый no-op) и все строки (одна операция за
-    /// раз). Секция Tunnels видна только при живом демоне и непустом списке —
+    /// (подавленный тик — молчаливый no-op), все строки (одна операция за
+    /// раз) и пункт сервиса — скрипт установки/удаления начинается с
+    /// `launchctl bootout`, и SIGTERM демону посреди операции оставил бы
+    /// полуприменённый туннель. Секция Tunnels видна только при живом демоне и непустом списке —
     /// иначе её нет целиком, включая заголовок и разделители. Пункт сервиса:
     /// `absent` → «Установить», `broken`/`outdated` → «Обновить»
     /// (переустановка), `installed` → «Удалить».
@@ -99,17 +101,17 @@ enum StatusMenuStructure {
             }
         }
         entries.append(.separator)
-        entries.append(serviceEntry(for: serviceState))
+        entries.append(serviceEntry(for: serviceState, isEnabled: !hasInFlightTunnelOperation))
         entries.append(.action(id: .quit, title: L10n.string("button.quit"), keyEquivalent: "q", modifiers: .command, isEnabled: true))
         return entries
     }
 
     /// Пункт меню сервиса из состояния: демона нет — установить; не отвечает
     /// или устарел — обновить (скрипт установки идемпотентен, действие то же);
-    /// жив — удалить.
-    private static func serviceEntry(for state: ServiceState) -> Entry {
+    /// жив — удалить. Во время туннельной операции пункт отключён.
+    private static func serviceEntry(for state: ServiceState, isEnabled: Bool) -> Entry {
         let action = serviceAction(for: state)
-        return .action(id: action.id, title: action.title, keyEquivalent: "", modifiers: [], isEnabled: true)
+        return .action(id: action.id, title: action.title, keyEquivalent: "", modifiers: [], isEnabled: isEnabled)
     }
 
     /// Действие и заголовок пункта сервиса из состояния — единый источник для
@@ -320,7 +322,10 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// Состояние сервиса тоже выводится на каждом тике и может смениться при
     /// открытом меню (демон поднялся или умер): заголовок и действие пункта
-    /// синхронизируем живьём тем же маппингом, что и в сборке меню.
+    /// синхронизируем живьём тем же маппингом, что и в сборке меню. Здесь же —
+    /// кликабельность: клик по строке туннеля меню не закрывает, и операция,
+    /// стартовавшая в открытом меню, обязана тут же отключить пункт сервиса
+    /// (как «Обновить» в `updateRefreshItemEnabledState`).
     private func updateServiceItem() {
         guard let menu else { return }
         let action = StatusMenuStructure.serviceAction(for: model.serviceState)
@@ -331,6 +336,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         for item in menu.items where serviceTags.contains(item.tag) {
             item.tag = action.id.rawValue
             item.title = action.title
+            item.isEnabled = model.inFlightTunnels.isEmpty
         }
     }
 
@@ -471,6 +477,16 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         installer: ServiceInstalling? = nil,
         quit: () -> Void
     ) {
+        // Установка/удаление во время туннельной операции — молчаливый no-op:
+        // скрипты стартуют с `launchctl bootout` → SIGTERM демону → отмена
+        // задачи исполнителя → SIGKILL wg-quick посреди применения адресов/
+        // маршрутов/DNS (полуприменённый туннель — исход, от которого операции
+        // специально защищены от отмены). Пункт меню отключается вместе со
+        // строками; guard — вторая линия, как one-op-guard в `toggleTunnel`
+        // (ре-рендер disabled асинхронен).
+        if action == .installService || action == .uninstallService {
+            guard model.inFlightTunnels.isEmpty else { return }
+        }
         switch action {
         case .refresh:
             // Кнопка «Обновить» — принудительный рескан имён туннелей

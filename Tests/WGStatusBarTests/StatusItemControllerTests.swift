@@ -157,6 +157,63 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(installer.uninstallCount, 0)
     }
 
+    /// Туннельный клиент с клапаном: up/down висит, пока клапан не отпущен, —
+    /// `inFlightTunnels` держится непустым, как реальная операция на 2–9 с.
+    private final class GatedTunnelClient: TunnelCommandRunning {
+        private let lock = NSLock()
+        private var continuation: CheckedContinuation<Void, Never>?
+
+        func list() async throws -> [String] { [] }
+
+        func up(_ name: String) async throws {
+            await withCheckedContinuation { continuation in
+                lock.withLock { self.continuation = continuation }
+            }
+        }
+
+        func down(_ name: String) async throws {
+            await withCheckedContinuation { continuation in
+                lock.withLock { self.continuation = continuation }
+            }
+        }
+
+        func releaseGate() {
+            lock.withLock {
+                continuation?.resume()
+                continuation = nil
+            }
+        }
+    }
+
+    /// Установка/удаление сервиса во время туннельной операции — молчаливый
+    /// no-op, как вторая линия за disabled-пунктом (ре-рендер асинхронен):
+    /// скрипт стартует с `launchctl bootout` → SIGTERM демону посреди
+    /// wg-quick up — полуприменённый туннель.
+    func testPerformServiceActionsAreNoOpDuringTunnelOperation() {
+        let client = GatedTunnelClient()
+        let model = WireGuardStatusModel(
+            commandRunner: SuccessRunner(),
+            tunnelNamer: CountingTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath,
+            tunnelCommandRunner: client
+        )
+        model.toggleTunnel(named: "kvmka-ai")
+        XCTAssertFalse(model.inFlightTunnels.isEmpty, "предусловие: операция в полёте")
+
+        let installer = CountingInstaller()
+        StatusItemController.performStatusAction(.installService, model: model, installer: installer, quit: {})
+        StatusItemController.performStatusAction(.uninstallService, model: model, installer: installer, quit: {})
+
+        // Даём асинхронно запланированные вызовы шанс проявиться до проверки.
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(installer.installCount, 0, "установка во время операции — no-op")
+        XCTAssertEqual(installer.uninstallCount, 0, "удаление во время операции — no-op")
+
+        client.releaseGate()
+        waitUntil { model.inFlightTunnels.isEmpty }
+    }
+
     // MARK: - Структура меню: пункты, шорткаты, разделители, enabled
 
     func testMenuStructureEntriesOrderAndShortcuts() {
@@ -233,9 +290,11 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertFalse(entries.contains { if case .tunnelsHeader = $0 { return true }; return false })
     }
 
-    /// Операция в полёте: все строки и «Обновить» некликабельны (одна
-    /// операция за раз; подавленный ⌘R — молчаливый no-op).
-    func testMenuStructureDisablesRowsAndRefreshDuringOperation() {
+    /// Операция в полёте: все строки, «Обновить» и пункт сервиса некликабельны
+    /// (одна операция за раз; подавленный ⌘R — молчаливый no-op; bootout
+    /// демона из скрипта установки/удаления посреди операции — SIGTERM
+    /// wg-quick и полуприменённый туннель).
+    func testMenuStructureDisablesRowsRefreshAndServiceDuringOperation() {
         let entries = StatusMenuStructure.entries(
             refreshEnabled: true,
             serviceState: .installed,
@@ -246,6 +305,14 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(entries[6], .tunnelRow(TunnelInfo(name: "kvmka-ai", isUp: true), isEnabled: false))
         XCTAssertEqual(entries[7], .tunnelRow(TunnelInfo(name: "kvmka-full", isUp: false), isEnabled: false))
         assertAction(actionEntry(.refresh, in: entries), id: .refresh, title: "button.refresh", shortcut: "r", enabled: false)
+        assertAction(
+            actionEntry(.uninstallService, in: entries),
+            id: .uninstallService,
+            title: "button.remove_service",
+            shortcut: "",
+            modifiers: [],
+            enabled: false
+        )
     }
 
     /// Ключ удалённого disabled-плейсхолдера «Управление тоннелями» не
