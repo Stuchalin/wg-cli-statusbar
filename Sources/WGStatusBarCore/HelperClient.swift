@@ -75,8 +75,12 @@ struct HelperClient {
     // MARK: - Сокет-операции под дедлайном (poll-затем-операция, как в DaemonServer)
 
     private static func connectToDaemon(fd: Int32, socketPath: String, deadline: Date) throws {
-        // Неблокирующий connect: переполненный backlog unix-сокета блокирует
-        // connect неопределённо долго — дедлайн обязан работать и здесь.
+        // Неблокирующий connect: блокирующий не подчиняется дедлайну обмена.
+        // На macOS AF_UNIX при переполненном backlog ядро отвечает мгновенным
+        // ECONNREFUSED (проверено эмпирически), так что EINPROGRESS-ветка ниже
+        // платформенно-оборонительная: если ядро всё же вернёт «в процессе»,
+        // poll дождётся готовности или дедлайна — зависание и ошибка
+        // классификации (EINPROGRESS как отказ) исключены.
         let originalFlags = fcntl(fd, F_GETFL, 0)
         _ = fcntl(fd, F_SETFL, originalFlags | O_NONBLOCK)
         defer { _ = fcntl(fd, F_SETFL, originalFlags) }

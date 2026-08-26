@@ -80,6 +80,18 @@ EOF
 chmod 644 "$PLIST_PATH"
 chown root:wheel "$PLIST_PATH"
 
+# The daemon writes wg-quick stderr tails (which can quote config lines — see
+# the tunnel err-detail decision in HelperDaemon) to its stderr, which launchd
+# redirects here. A missing log is created by launchd with default 0644 —
+# readable by every local user. Pre-create it root-only instead: launchd
+# appends to the existing file and keeps its mode, so a config-quoting failure
+# detail never lands in a world-readable file. Re-installs also fix the mode
+# of a log created by an older install.
+LOG_PATH="/var/log/wgstatusbar-helper.log"
+touch "$LOG_PATH"
+chown root:wheel "$LOG_PATH"
+chmod 600 "$LOG_PATH"
+
 # bootout is asynchronous — bootstrap can hit the still-unloading service
 # ("Input/output error") on the update-in-place path. Retry briefly with
 # stderr silenced, then make one final unsilenced attempt whose stderr and

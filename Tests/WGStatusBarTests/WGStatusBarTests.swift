@@ -1,3 +1,4 @@
+import Combine
 import XCTest
 @testable import WGStatusBarCore
 
@@ -1007,6 +1008,45 @@ final class WGStatusBarTests: XCTestCase {
 
         XCTAssertEqual(model.tunnels, [TunnelInfo(name: "kvmka-ai", isUp: true)], "ошибка list не чистит tunnels")
         XCTAssertNil(model.lastFailure, "ошибка list не попадает в карточку")
+    }
+
+    /// Идентичный список — без republish: повторный list с теми же именами и
+    /// состояниями не должен давать новый выхлоп `$tunnels` (подписка в
+    /// `StatusItemController` перестраивает открытое меню на каждый выхлоп —
+    /// иначе каждое открытие меню перестраивало бы секцию дважды).
+    func testLoadTunnelsDoesNotRepublishIdenticalList() {
+        let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
+        let client = MockTunnelClient()
+        client.configure(listResults: [
+            .success(["kvmka-ai"]),
+            .success(["kvmka-ai"]),
+        ])
+        let model = makeInstalledModel(
+            showExecutor: showExecutor,
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-ai"]),
+            tunnelClient: client
+        )
+
+        var emissions = 0
+        let cancellable = model.$tunnels.sink { _ in emissions += 1 }
+        defer { cancellable.cancel() }
+
+        model.loadTunnels()
+        waitUntil(
+            { client.listCalls == 1 && model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] },
+            "первый list должен заполнить tunnels"
+        )
+        let emissionsAfterFirstList = emissions
+
+        model.loadTunnels()
+        waitUntil({ client.listCalls == 2 }, "второй list должен быть отправлен")
+        spinRunLoop()
+
+        XCTAssertEqual(
+            emissions,
+            emissionsAfterFirstList,
+            "идентичный список — без нового выхлопа $tunnels"
+        )
     }
 
     /// До `.installed` loadTunnels не дёргает клиента вовсе: у старого демона

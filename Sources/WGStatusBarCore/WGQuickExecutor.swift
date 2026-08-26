@@ -15,8 +15,10 @@ public enum WGQuickExecutorError: Error, Equatable {
     case timedOut
     /// Ненулевой exit или провал запуска; деталь — хвост stderr (~300
     /// символов; собирается и в маркер-ветке самостоятельного ненулевого
-    /// выхода — снапшотом, без ожидания EOF пайпов) либо `exit status N`
-    /// при пустом stderr, только для лога демона.
+    /// выхода — снапшотом, без ожидания EOF пайпов), `exit status N` при
+    /// пустом stderr либо текстовое сообщение о гонке «marker-KILL против
+    /// teardown-трапа» (убит сигналом при мёртвой пробе) — только для лога
+    /// демона.
     case failed(String)
 }
 
@@ -186,8 +188,11 @@ public final class WGQuickExecutor: WGQuickExecuting {
         // снятия teardown-трапа (cmd_up wg-quick: monitor_daemon →
         // execute_hooks POST_UP → trap -) — он обещает «настройка до PostUp
         // завершена», но не «wg-quick завершился успешно». Успех: убитый
-        // нами скрипт (wait-ветка, смерть от сигнала) либо самостоятельный
-        // exit 0; самостоятельный ненулевой exit — set -e провалил PostUp-хук,
+        // нами скрипт при живой пробе туннеля (обычный случай — `wait`-ветка,
+        // смерть от сигнала при живом туннеле; проба отсекает гонку «сорвавшийся
+        // PostUp разобрал туннель teardown-трапом до нашего KILL») либо
+        // самостоятельный exit 0; самостоятельный ненулевой exit — set -e
+        // провалил PostUp-хук,
         // teardown-трап разобрал туннель — честный failed, а не скрытый ok
         // (раннер отдаёт сюда снапшот stderr — деталь с текстом провала
         // хука доезжает до лога демона, единственного канала диагностики).
@@ -198,7 +203,23 @@ public final class WGQuickExecutor: WGQuickExecuting {
         // Гонку «TERM op-таймаута раньше нашего KILL» (маркер в последнюю
         // секунду бюджета) отдаём timeout-ветке ниже — судьбу решает проба.
         if result.stderrMarkerSeen, !result.timedOut {
-            if result.terminationReason == .uncaughtSignal || result.terminationStatus == 0 {
+            // Убитый marker-KILL'ом скрипт — не автоматический успех: между
+            // маркером и KILL сорвавшийся PostUp мог успеть РАЗОБРАТЬ туннель
+            // (set -e → teardown-трап завершился до нашей задержки), и ok при
+            // мёртвом туннеле был бы ложным. Проба подтверждает ответ фактом:
+            // туннель жив (скрипт висел в `wait` или трап ещё не дошёл до
+            // интерфейса) → ok; мёртв → честный failed — деталь текстовая,
+            // для лога демона (stderr здесь не собирается — буферы непрочитаны),
+            // карточку сойдёт ближайший show-тик.
+            if result.terminationReason == .uncaughtSignal {
+                if let probeName, tunnelUpProbe(probeName) {
+                    return
+                }
+                throw WGQuickExecutorError.failed(
+                    "killed by signal \(result.terminationStatus) after monitor marker; tunnel is down"
+                )
+            }
+            if result.terminationStatus == 0 {
                 return
             }
             throw WGQuickExecutorError.failed(Self.detail(from: result))

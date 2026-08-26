@@ -433,11 +433,12 @@ public final class WireGuardStatusModel: ObservableObject {
     }
 
     /// Подтягивает список туннелей демона (`list` → имена; isUp выводится из
-    /// текущего снапшота). Триггеры: открытие меню, ответ up/down, успешный
-    /// Install/Update — НЕ 5-секундный тик. Ошибки глотаются молча: данные
-    /// меню оппортунистические, не источник статуса (иначе dev-фолбэк без
-    /// демона получал бы ложную ошибку на карточке). До `.installed` демон не
-    /// дёргается вовсе: у старого build `list` — unknown command.
+    /// текущего снапшота). Триггеры: открытие меню, ответ up/down, переход
+    /// serviceState при открытом меню — НЕ 5-секундный тик. Ошибки глотаются
+    /// молча: данные меню оппортунистические, не источник статуса (иначе
+    /// dev-фолбэк без демона получал бы ложную ошибку на карточке). До
+    /// `.installed` демон не дёргается вовсе: у старого build `list` —
+    /// unknown command.
     public func loadTunnels() {
         guard serviceState == .installed else { return }
         let client = tunnelCommandRunner
@@ -445,7 +446,12 @@ public final class WireGuardStatusModel: ObservableObject {
             guard let self else { return }
             do {
                 let names = try await client.list()
-                self.tunnels = names.map { TunnelInfo(name: $0, isUp: self.isTunnelUp(named: $0)) }
+                let updated = names.map { TunnelInfo(name: $0, isUp: self.isTunnelUp(named: $0)) }
+                // Без изменений — без republish (как recomputeTunnelStates):
+                // идентичный список не должен пересобирать открытое меню.
+                if updated != self.tunnels {
+                    self.tunnels = updated
+                }
             } catch {
                 // Молча: список конфигов — не источник статуса.
             }

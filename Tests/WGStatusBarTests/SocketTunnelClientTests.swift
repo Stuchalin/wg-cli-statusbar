@@ -5,8 +5,10 @@ import XCTest
 /// tmp-сокете (заглушки стора конфигов и исполнителя вместо wg-quick/wg) и
 /// сырые слушатели-заглушки для сценариев, которые живой сервер произвести не
 /// может (чужие версии заголовка, мусор, мгновенный EOF). Реального wg-quick
-/// и root нет, процессы не спавнятся. Плюс инвариант таймингов: худший случай
-/// очереди последовательного демона против клиентского дедлайна операции.
+/// и root нет; единственное исключение — e2e-тест с настоящим
+/// `WGQuickExecutor`, спавнящим короткоживущий zsh-стаб (без root). Плюс
+/// инвариант таймингов: худший случай очереди последовательного демона против
+/// клиентского дедлайна операции.
 final class SocketTunnelClientTests: XCTestCase {
     private var socketPaths: [String] = []
     private var serverTask: Task<Void, Error>?
@@ -288,6 +290,44 @@ final class SocketTunnelClientTests: XCTestCase {
             executor.calls,
             [TunnelCall(command: "up", name: "kvmka-ai"), TunnelCall(command: "down", name: "kvmka-ai")],
             "клиент отправляет имя как есть, демон валидирует и запускает исполнитель"
+        )
+    }
+
+    func testUpThroughRealExecutorRoundTripReturnsOk() async throws {
+        // Продакшн-композиция целиком: сокет → DaemonServer (валидация стора)
+        // → настоящий `WGQuickExecutor` (резолв стаба, замена PATH, маркер
+        // монитора → KILL → проба живого туннеля) → `ok` без payload клиенту.
+        // Маршрутизация (со стабом) и классификация wg-quick (без сервера)
+        // покрыты своими сьютами — здесь проверяется их сшивка: потеря await
+        // или рассинхрон типов ошибок между исполнителем и сервером всплыли
+        // бы только в бою.
+        let stubPath = NSTemporaryDirectory()
+            .appending("wgstatusbar-tunnelclienttests-wgquick-\(UUID().uuidString)")
+        try "#!/bin/zsh\nprintf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2\nsleep 30\n"
+            .write(toFile: stubPath, atomically: true, encoding: .utf8)
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: stubPath)
+        defer { try? FileManager.default.removeItem(atPath: stubPath) }
+
+        let executor = WGQuickExecutor(
+            resolver: WGQuickResolver(searchPaths: [stubPath], fileExists: { _ in true }),
+            tunnelUpProbe: { _ in true }
+        )
+        let socketPath = makeSocketPath()
+        try await startServer(
+            socketPath: socketPath,
+            configStore: makeConfigStore(names: ["kvmka-ai"]),
+            tunnelExecutor: executor
+        )
+
+        let started = Date()
+        let client = SocketTunnelClient(socketPath: socketPath)
+        try await client.up("kvmka-ai")
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(
+            elapsed,
+            6,
+            "ok по маркеру приходит за ~2 c (маркер → задержка KILL 1 c), не по дедлайну клиента 16 c"
         )
     }
 
