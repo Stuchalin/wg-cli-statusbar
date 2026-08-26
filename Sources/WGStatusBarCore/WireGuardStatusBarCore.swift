@@ -178,7 +178,9 @@ public final class WireGuardStatusModel: ObservableObject {
     /// root, namer в приложении промахивается всегда), поэтому применяется
     /// ПОВЕРХ namer-резолва на обоих путях записи displayName (`loadTunnels`
     /// и 5-с тик); namer остаётся для непокрытых интерфейсов и dev-режима
-    /// без демона.
+    /// без демона. Успешный тик БЕЗ демона (sudo-фолбэк) маппинг сбрасывает:
+    /// раз демон исчез, его последний ответ устарел, и перетирать живой
+    /// namer-резолв он больше не должен.
     private var stateInterfaceNames: [String: String] = [:]
     /// Имена туннелей с операцией в полёте (наличие имени = in-flight): строки
     /// меню некликабельны, show-тик подавлен, снапшот не устаревает.
@@ -348,7 +350,16 @@ public final class WireGuardStatusModel: ObservableObject {
                 )
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
-                    self.interfaces = Self.applyingStateInterfaceNames(self.stateInterfaceNames, to: parsed)
+                    if socketPresent {
+                        self.interfaces = Self.applyingStateInterfaceNames(self.stateInterfaceNames, to: parsed)
+                    } else {
+                        // Успешный тик без демона (sudo-фолбэк) — источник имён
+                        // снова namer: маппинг последнего ответа state устарел
+                        // вместе с демоном и не должен вечно перетирать свежий
+                        // резолв при переиспользовании utun другим конфигом.
+                        self.stateInterfaceNames = [:]
+                        self.interfaces = parsed
+                    }
                     self.lastSuccessAt = self.now()
                     self.isLoading = false
                     self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))

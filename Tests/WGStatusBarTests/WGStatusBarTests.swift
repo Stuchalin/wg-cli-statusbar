@@ -1249,6 +1249,83 @@ final class WGStatusBarTests: XCTestCase {
         )
     }
 
+    /// Демон исчез посреди запуска (uninstall из меню): успешный тик
+    /// sudo-фолбэка обязан сбросить state-маппинг — иначе последний ответ
+    /// умершего демона вечно перетирал бы свежий namer-резолв при
+    /// переиспользовании utun другим конфигом (namer — источник имён в
+    /// dev-режиме без демона).
+    func testDaemonlessTickDropsStaleStateInterfaceNames() {
+        let client = MockTunnelClient()
+        client.configure(stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")])])
+        // sun_path вмещает ~103 байта — короткий /tmp-путь с усечённым UUID.
+        let socketPath = "/tmp/wgstatusbar-modeltests-"
+            + UUID().uuidString.prefix(8)
+            + ".sock"
+        daemonSocketPaths.append(socketPath)
+        let server = DaemonServer(
+            executor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            socketPath: socketPath
+        )
+        daemonServerTasks.append(Task.detached { try await server.run() })
+        waitDaemonListening(socketPath: socketPath)
+
+        let fallbackRunner = StubCommandRunner(results: [.success(makeConnectedDump(interfaceName: "utun3"))])
+        let model = WireGuardStatusModel(
+            commandRunner: fallbackRunner,
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "fresh-namer-name"]),
+            socketExists: { FileManager.default.fileExists(atPath: socketPath) },
+            socketPath: socketPath,
+            tunnelCommandRunner: client
+        )
+        model.refresh()
+        waitUntil({ model.serviceState == .installed }, "живой демон должен довести модель до installed")
+        model.loadTunnels()
+        waitUntil(
+            { model.interfaces.first?.displayName == "kvmka-ai" },
+            "предусловие: пока демон жив, state перетирает namer"
+        )
+
+        // Демон удалили: сокета нет — тик уходит в фолбэк-раннер.
+        try? FileManager.default.removeItem(atPath: socketPath)
+        model.refresh()
+        waitUntil(
+            { fallbackRunner.consumedCount > 0 && !model.isLoading },
+            "тик фолбэка должен пройти"
+        )
+
+        XCTAssertEqual(model.serviceState, .absent, "сокет исчез — состояние absent")
+        XCTAssertEqual(
+            model.interfaces.first?.displayName,
+            "fresh-namer-name",
+            "устаревший state-маппинг не должен перетирать namer в dev-режиме без демона"
+        )
+    }
+
+    /// Конфликт «два конфига на одном utun» (окно свежести пар на стороне
+    /// данных): свёртка маппинга — first-wins без падения
+    /// (`Dictionary(uniqueKeysWithValues:)` на дубликате крэшила бы).
+    func testStateMappingKeepsFirstEntryForDuplicatedUtun() {
+        let client = MockTunnelClient()
+        client.configure(stateResults: [.success([
+            TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3"),
+            TunnelState(name: "kvmka-full", isUp: true, utun: "utun3"),
+        ])])
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+
+        model.loadTunnels()
+        waitUntil({ model.tunnels.count == 2 }, "обе строки state должны попасть в tunnels")
+
+        XCTAssertEqual(
+            model.interfaces.first?.displayName,
+            "kvmka-ai",
+            "при дубликате utun в маппинге побеждает первый ответ"
+        )
+    }
+
     // MARK: - Гигиена ключей после удаления StatusMenuView
 
     /// Ключи, которые использовал только удалённый `StatusMenuView` (и ключи

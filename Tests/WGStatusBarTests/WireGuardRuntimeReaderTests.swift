@@ -101,6 +101,24 @@ final class WireGuardRuntimeReaderTests: XCTestCase {
         )
     }
 
+    func testTwoConfigsOnSameInterfaceAreBothReturned() {
+        // Окно свежести: два `.name` на одном utun с согласованными mtime —
+        // конфликт на стороне данных, ридер по интерфейсу не фильтрует
+        // (выбор победителя за вызывающим: namer сворачивает last-wins,
+        // демон отвечает обе строки up).
+        writeFile("work-vpn.name", contents: "utun2")
+        writeFile("home.name", contents: "utun2")
+        writeFile("utun2.sock", contents: "")
+
+        XCTAssertEqual(
+            Set(makeReader().readPairs()),
+            [
+                WireGuardRuntimePair(configName: "work-vpn", interfaceName: "utun2"),
+                WireGuardRuntimePair(configName: "home", interfaceName: "utun2"),
+            ]
+        )
+    }
+
     // MARK: - Устаревшие и битые записи
 
     func testNameWithoutNeighboringSockIsDropped() {

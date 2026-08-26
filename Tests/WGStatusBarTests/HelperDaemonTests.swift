@@ -36,7 +36,7 @@ final class HelperDaemonTests: XCTestCase {
             fileSystem: FileManagerTunnelConfigFileSystem()
         ),
         tunnelExecutor: WGQuickExecuting = StubTunnelExecutor(),
-        runtimeReader: WireGuardRuntimeReader = WireGuardRuntimeReader()
+        runtimeReader: WireGuardRuntimeReader? = nil
     ) async throws {
         let server = DaemonServer(
             executor: executor,
@@ -44,7 +44,10 @@ final class HelperDaemonTests: XCTestCase {
             readDeadline: readDeadline,
             configStore: configStore,
             tunnelExecutor: tunnelExecutor,
-            runtimeReader: runtimeReader
+            // Дефолт — пустой псевдокаталог `/var/run/wireguard`: настоящая
+            // машина не должна протекать в тесты (по образцу
+            // SocketTunnelClientTests.startServer).
+            runtimeReader: runtimeReader ?? makeRuntimeReader(StubRuntimeFileSystem())
         )
         serverTask = Task.detached { try await server.run() }
         // Файл сокета появляется на bind — раньше accept-цикла.
