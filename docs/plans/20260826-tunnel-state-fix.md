@@ -43,11 +43,11 @@
 ## Implementation Steps
 
 ### Task 1: `WireGuardRuntimeReader` — извлечение сканера из namer'а
-- [ ] новый `WireGuardRuntimeReader` (Core): скан `/var/run/wireguard/*.name` → валидированные пары «конфиг → utun» с правилом свежести namer'а (соседний `<utun>.sock`, |Δmtime| < 2 c; битый/нечитаемый файл → пара отбрасывается); инжектируемые FS и `directoryPath` — переиспользовать `WireGuardTunnelNameFileSystem`
-- [ ] `WireGuardTunnelNamer` рефакторится внутрь на ридер (кэш, ленивый рескан и публичный контракт `displayName(for:)` не меняются) — чистый рефактор без смены поведения
-- [ ] тесты `WireGuardRuntimeReaderTests`: валидная пара; .name без .sock; .sock без .name; расхождение mtime ≥ 2 c (зависший .name на переиспользованном utun); пустое содержимое .name; отсутствующая директория → пустой результат
-- [ ] существующие `WireGuardTunnelNamerTests` остаются зелёными поверх ридера (переносить кейсы свежести не дублированием, а использованием ридера в фейках при необходимости)
-- [ ] полный сьют зелёный
+- [x] новый `WireGuardRuntimeReader` (Core): скан `/var/run/wireguard/*.name` → валидированные пары «конфиг → utun» с правилом свежести namer'а (соседний `<utun>.sock`, |Δmtime| < 2 c; битый/нечитаемый файл → пара отбрасывается); инжектируемые FS и `directoryPath` — переиспользовать `WireGuardTunnelNameFileSystem`
+- [x] `WireGuardTunnelNamer` рефакторится внутрь на ридер (кэш, ленивый рескан и публичный контракт `displayName(for:)` не меняются) — чистый рефактор без смены поведения
+- [x] тесты `WireGuardRuntimeReaderTests`: валидная пара; .name без .sock; .sock без .name; расхождение mtime ≥ 2 c (зависший .name на переиспользованном utun); пустое содержимое .name; отсутствующая директория → пустой результат
+- [x] существующие `WireGuardTunnelNamerTests` остаются зелёными поверх ридера (переносить кейсы свежести не дублированием, а использованием ридера в фейках при необходимости)
+- [x] полный сьют зелёный
 
 ### Task 2: Протокол — запрос `state`, bump build
 - [ ] `HelperRequest` += `.state`; `encode` → `state\n`

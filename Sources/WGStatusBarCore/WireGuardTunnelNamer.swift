@@ -37,14 +37,8 @@ public struct FileManagerTunnelNameFileSystem: WireGuardTunnelNameFileSystem {
 
 /// Резолвит сырое имя интерфейса (`utun2`) в имя конфига wg-quick (`work-vpn`).
 ///
-/// Механика darwin-скрипта wg-quick: `add_if` (через wireguard-go) пишет
-/// фактическое имя интерфейса в `<каталог>/<имя_конфига>.name`, `del_if`
-/// удаляет файл. Свежесть записи валидируется соседним `<utun>.sock`:
-/// оба файла создаёт wireguard-go при подъёме туннеля, поэтому у актуальной
-/// пары их mtime расходятся меньше чем на 2 секунды (правило зеркалит
-/// `get_real_interface` из darwin.bash). Сокет привязан к интерфейсу,
-/// а не к конфигу: при переиспользовании utun другим конфигом сокет
-/// пересоздаётся, и mtime расходится с зависшим старым `.name`.
+/// Скан каталога и правило свежести пары `.name`/`.sock` — в
+/// `WireGuardRuntimeReader`; namer добавляет поверх него кэш.
 ///
 /// Кэш `utun → имя` под `NSLock`: вызовы идут из фонового refresh и с главного
 /// потока (⌘R). Попадание в кэш валидируется по текущей паре `.name`/`.sock`
@@ -53,13 +47,7 @@ public struct FileManagerTunnelNameFileSystem: WireGuardTunnelNameFileSystem {
 /// уже другой конфиг wg-quick. Невалидная запись — исключительный `rescan()`;
 /// также рескан на первом вызове и по кнопке «Обновить».
 public final class WireGuardTunnelNamer {
-    /// Допуск расхождения mtime пары `.name`/`.sock` — правило
-    /// `get_real_interface` из darwin.bash (`diff -ge 2 || diff -le -2`
-    /// → запись неактуальна).
-    private static let pairMtimeTolerance: TimeInterval = 2
-
-    private let directoryPath: String
-    private let fileSystem: WireGuardTunnelNameFileSystem
+    private let reader: WireGuardRuntimeReader
     private let lock = NSLock()
     private var cache: [String: String] = [:]
     private var hasScanned = false
@@ -68,8 +56,10 @@ public final class WireGuardTunnelNamer {
         directoryPath: String = "/var/run/wireguard",
         fileSystem: WireGuardTunnelNameFileSystem = FileManagerTunnelNameFileSystem()
     ) {
-        self.directoryPath = directoryPath
-        self.fileSystem = fileSystem
+        self.reader = WireGuardRuntimeReader(
+            directoryPath: directoryPath,
+            fileSystem: fileSystem
+        )
     }
 
     /// Человекочитаемое имя туннеля; если не резолвится — само имя интерфейса.
@@ -78,7 +68,7 @@ public final class WireGuardTunnelNamer {
         defer { lock.unlock() }
 
         if let cached = cache[interfaceName] {
-            guard isEntryCurrentLocked(configName: cached, interfaceName: interfaceName) else {
+            guard reader.isPairCurrent(configName: cached, interfaceName: interfaceName) else {
                 // Туннель снесли/переиспользовали utun под другой конфиг —
                 // закэшированное имя устарело, перечитываем каталог.
                 scanLocked()
@@ -101,64 +91,15 @@ public final class WireGuardTunnelNamer {
         scanLocked()
     }
 
-    /// Запись `<config>.name` ещё актуальна для этого интерфейса: файл читается,
-    /// его содержимое указывает на интерфейс, рядом живой сокет, mtime пары
-    /// согласованы.
-    // Вызывается только под lock.
-    private func isEntryCurrentLocked(configName: String, interfaceName: String) -> Bool {
-        let namePath = directoryPath + "/" + configName + ".name"
-        let sockPath = directoryPath + "/" + interfaceName + ".sock"
-        guard
-            let storedInterfaceName = fileSystem.contents(ofFile: namePath)?
-                .trimmingCharacters(in: .whitespacesAndNewlines),
-            storedInterfaceName == interfaceName,
-            fileSystem.fileExists(atPath: sockPath)
-        else { return false }
-        return isPairConsistentLocked(namePath: namePath, sockPath: sockPath)
-    }
-
-    /// Актуальную пару `.name`/`.sock` создаёт wireguard-go при подъёме
-    /// туннеля, поэтому их mtime расходятся меньше чем на 2 секунды. Сокет
-    /// персональный для интерфейса, а не для конфига: если utun занял другой
-    /// конфиг, сокет пересоздаётся, и mtime зависшего `.name` расходится
-    /// с ним — запись устарела, каким бы правильным ни было содержимое.
-    // Вызывается только под lock.
-    private func isPairConsistentLocked(namePath: String, sockPath: String) -> Bool {
-        guard
-            let nameDate = fileSystem.modificationDate(ofFile: namePath),
-            let sockDate = fileSystem.modificationDate(ofFile: sockPath)
-        else { return false }
-        return abs(sockDate.timeIntervalSince(nameDate)) < Self.pairMtimeTolerance
-    }
-
     // Вызывается только под lock.
     private func scanLocked() {
         hasScanned = true
         var resolved: [String: String] = [:]
 
-        for entry in fileSystem.entries(inDirectory: directoryPath) where entry.hasSuffix(".name") {
-            let configName = String(entry.dropLast(".name".count))
-            guard !configName.isEmpty else { continue }
-
-            // Содержимое читается целиком, переводы строк обрезаются —
-            // длина имени интерфейса не фиксируется.
-            let namePath = directoryPath + "/" + entry
-            guard
-                let interfaceName = fileSystem.contents(ofFile: namePath)?
-                    .trimmingCharacters(in: .whitespacesAndNewlines),
-                !interfaceName.isEmpty
-            else { continue }
-
-            // Нет соседнего сокета или mtime пары разошлись — запись устарела:
-            // туннель снесли мимо del_if, либо этот utun уже поднял другой
-            // конфиг и сокет пересоздан.
-            let sockPath = directoryPath + "/" + interfaceName + ".sock"
-            guard
-                fileSystem.fileExists(atPath: sockPath),
-                isPairConsistentLocked(namePath: namePath, sockPath: sockPath)
-            else { continue }
-
-            resolved[interfaceName] = configName
+        // При конфликте двух конфигов на одном utun (зависший `.name`)
+        // побеждает последний по листингу — как и до извлечения ридера.
+        for pair in reader.readPairs() {
+            resolved[pair.interfaceName] = pair.configName
         }
 
         cache = resolved
