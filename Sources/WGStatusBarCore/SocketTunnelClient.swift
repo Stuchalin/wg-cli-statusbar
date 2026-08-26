@@ -10,6 +10,15 @@ import Foundation
 /// только с кодом, без детали (Task 4). Тишина до дедлайна — тоже
 /// `.generic(error.tunnel_op_failed)`, не `commandTimeout`: его текст — про
 /// `wg show`, чужой команде не подходит.
+/// Туннельные операции демона для модели; инжектится для тестов (мок со
+/// счётчиками и программируемыми результатами — по образцу
+/// `WGShowCommandRunning`).
+public protocol TunnelCommandRunning {
+    func list() async throws -> [String]
+    func up(_ name: String) async throws
+    func down(_ name: String) async throws
+}
+
 public struct SocketTunnelClient {
     /// Продакшн-дедлайн полного обмена операцией. Покрывает худший случай
     /// очереди последовательного accept-loop демона: show-тик, стартовавший
@@ -39,11 +48,11 @@ public struct SocketTunnelClient {
     }
 
     public func up(_ name: String) async throws {
-        try await exchange(.up(name))
+        _ = try await exchange(.up(name))
     }
 
     public func down(_ name: String) async throws {
-        try await exchange(.down(name))
+        _ = try await exchange(.down(name))
     }
 
     /// Обмен + командно-специфичная интерпретация: `ok` → payload (для
@@ -89,3 +98,5 @@ public struct SocketTunnelClient {
         }
     }
 }
+
+extension SocketTunnelClient: TunnelCommandRunning {}

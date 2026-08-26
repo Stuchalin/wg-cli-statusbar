@@ -167,9 +167,21 @@ public final class WireGuardStatusModel: ObservableObject {
     /// (сокет-файл + исход обмена) — не хранится, пересчитывается на каждом
     /// refresh. Управляет пунктом меню установки/обновления/удаления сервиса.
     @Published public private(set) var serviceState: ServiceState = .absent
+    /// Туннели из конфигов wg-quick (демон, `list`): имена + выведенный isUp.
+    /// Данные меню — оппортунистические: ошибки `loadTunnels()` глотаются,
+    /// статус карточки от них не зависит.
+    @Published public private(set) var tunnels: [TunnelInfo] = []
+    /// Имена туннелей с операцией в полёте (наличие имени = in-flight): строки
+    /// меню некликабельны, show-тик подавлен, снапшот не устаревает.
+    /// Отдельного состояния «failed» нет — ошибку несёт существующий one-tick
+    /// `lastFailure`.
+    @Published public private(set) var inFlightTunnels: Set<String> = []
 
     private let commandRunner: WGShowCommandRunning
     private let tunnelNamer: WireGuardTunnelNaming
+    /// Туннельные операции демона (продакшн — `SocketTunnelClient`; мок —
+    /// в тестах модели).
+    private let tunnelCommandRunner: TunnelCommandRunning
     /// Probe сокета демона на каждом refresh: файл есть → работаем через
     /// демон, нет → фолбэк (продакшн — процессный раннер, dev/sudo).
     private let socketExists: () -> Bool
@@ -220,19 +232,22 @@ public final class WireGuardStatusModel: ObservableObject {
     }
 
     /// Полный init: свой probe сокета и путь — тесты состояния инжектируют
-    /// мутабельный флаг и tmp-сокет; часы — фейковые часы тестов устарелости.
+    /// мутабельный флаг и tmp-сокет; часы — фейковые часы тестов устарелости;
+    /// туннельный клиент — мок туннельных тестов.
     internal init(
         commandRunner: WGShowCommandRunning,
         tunnelNamer: WireGuardTunnelNaming,
         socketExists: @escaping () -> Bool,
         socketPath: String,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        tunnelCommandRunner: TunnelCommandRunning = SocketTunnelClient()
     ) {
         self.commandRunner = commandRunner
         self.tunnelNamer = tunnelNamer
         self.socketExists = socketExists
         self.socketPath = socketPath
         self.now = now
+        self.tunnelCommandRunner = tunnelCommandRunner
     }
 
     deinit {
@@ -249,8 +264,14 @@ public final class WireGuardStatusModel: ObservableObject {
     /// больше `stalenessLimit` (или успешных тиков не было — в продакшене
     /// недостижимо, `interfaces` пишет только успешный тик). Пустые данные —
     /// не устаревшие (нечему).
+    ///
+    /// Операция над туннелем в полёте — не устаревшие при любом прошедшем
+    /// времени: show-тик подавлен, `lastSuccessAt` не обновляется, а худший
+    /// случай очереди демона (13 c) переживает лимит (10 c) — без этого
+    /// иконка гасла бы и карточка приглушалась посреди живой операции.
     public var isDataStale: Bool {
         guard !interfaces.isEmpty else { return false }
+        guard inFlightTunnels.isEmpty else { return false }
         guard let lastSuccessAt else { return true }
         return now().timeIntervalSince(lastSuccessAt) > stalenessLimit
     }
@@ -285,6 +306,12 @@ public final class WireGuardStatusModel: ObservableObject {
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);
     /// обычный тик ресканит лениво и только встретив незнакомый utun.
     public func refresh(forceNameRescan: Bool = false) {
+        // Туннельная операция в полёте: show-тик пропускается целиком — без
+        // выставления ошибки, без смены serviceState (демон занят op-бюджетом
+        // до 9 c, а его accept-loop последовательен: queued show молчал бы до
+        // клиентского дедлайна и выводился бы в broken) и без стирания
+        // lastFailure. Триггер «после ответа up/down» вернёт данные сам.
+        guard inFlightTunnels.isEmpty else { return }
         // Тик таймера или ⌘R могут стартовать refresh поверх ещё не завершившегося
         // (команда с 5-секундным таймаутом): применяем только результат последнего,
         // чтобы старый снапшот/ошибка не перезаписали свежие данные.
@@ -313,6 +340,7 @@ public final class WireGuardStatusModel: ObservableObject {
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
                     self.interfaces = parsed
+                    self.recomputeTunnelStates()
                     self.lastSuccessAt = self.now()
                     self.isLoading = false
                     self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))
@@ -386,6 +414,85 @@ public final class WireGuardStatusModel: ObservableObject {
     /// refresh сотрёт. Привязывается к `InstallerService.onFailure` в AppDelegate.
     public func reportServiceFailure(_ message: String) {
         lastFailure = .generic(message)
+    }
+
+    // MARK: - Туннели
+
+    /// Туннель поднят ⟺ какой-то интерфейс снапшота носит его имя: namer
+    /// резолвит `utunN` → имя конфига wg-quick в `displayName`, а единственный
+    /// источник правды о состоянии — `wg show`.
+    ///
+    /// Честная оговорка: при нерезолве namer'а (displayName остался `utunN` —
+    /// `.name`-файл потерян или интерфейс поднят вне wg-quick) строка
+    /// показывает «выключен», а клик up приносит err от wg-quick («interface
+    /// already exists») — карточка покажет общую ошибку операции (деталь на
+    /// wire не приходит). Расхождение живёт, пока туннель не пересоздадут:
+    /// самоизлечения нет.
+    public func isTunnelUp(named name: String) -> Bool {
+        interfaces.contains { $0.displayName == name }
+    }
+
+    /// Подтягивает список туннелей демона (`list` → имена; isUp выводится из
+    /// текущего снапшота). Триггеры: открытие меню, ответ up/down, успешный
+    /// Install/Update — НЕ 5-секундный тик. Ошибки глотаются молча: данные
+    /// меню оппортунистические, не источник статуса (иначе dev-фолбэк без
+    /// демона получал бы ложную ошибку на карточке). До `.installed` демон не
+    /// дёргается вовсе: у старого build `list` — unknown command.
+    public func loadTunnels() {
+        guard serviceState == .installed else { return }
+        let client = tunnelCommandRunner
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                let names = try await client.list()
+                self.tunnels = names.map { TunnelInfo(name: $0, isUp: self.isTunnelUp(named: $0)) }
+            } catch {
+                // Молча: список конфигов — не источник статуса.
+            }
+        }
+    }
+
+    /// Клик по строке туннеля: направление — из `isTunnelUp`, операция — через
+    /// демон. Пока имя в `inFlightTunnels`, show-тик подавлен и снапшот не
+    /// устаревает. Успех → немедленный `refresh()` + `loadTunnels()`;
+    /// провал → one-tick `lastFailure` + `loadTunnels()` БЕЗ refresh — пролог
+    /// `refresh()` стирает `lastFailure` синхронно, ошибка не отрисовалась бы
+    /// вовсе; данные сойдёт следующий 5-с тик (прецедент: провал установки
+    /// сервиса — one-tick error без refresh).
+    public func toggleTunnel(named name: String) {
+        // Одна операция по имени за раз: повторный клик (меню успело
+        // пересобраться) не плодит параллельные up/down одного туннеля.
+        guard !inFlightTunnels.contains(name) else { return }
+        let shouldTearDown = isTunnelUp(named: name)
+        inFlightTunnels.insert(name)
+        let client = tunnelCommandRunner
+        Task { @MainActor [weak self] in
+            guard let self else { return }
+            do {
+                if shouldTearDown {
+                    try await client.down(name)
+                } else {
+                    try await client.up(name)
+                }
+                self.inFlightTunnels.remove(name)
+                self.refresh()
+                self.loadTunnels()
+            } catch {
+                self.inFlightTunnels.remove(name)
+                self.lastFailure = Self.failure(from: error)
+                self.loadTunnels()
+            }
+        }
+    }
+
+    /// isUp строк пересчитывается из свежего снапшота после каждого успешного
+    /// тика (`list` отдаёт только имена). Без изменений — без republish.
+    private func recomputeTunnelStates() {
+        guard !tunnels.isEmpty else { return }
+        let updated = tunnels.map { TunnelInfo(name: $0.name, isUp: isTunnelUp(named: $0.name)) }
+        if updated != tunnels {
+            tunnels = updated
+        }
     }
 
     private func startTimer() {
