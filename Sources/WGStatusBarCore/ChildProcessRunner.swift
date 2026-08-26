@@ -102,9 +102,12 @@ internal struct ChildProcessResult {
     /// (`stderrContainsLine`), SIGKILL по задержке
     /// запланирован (успевший выйти сам ребёнок до него не доживает —
     /// смотрите `terminationReason`/`terminationStatus`).
-    /// Вывод в этой ветке не собирался: EOF пайпов может прийти только со
+    /// stdout в этой ветке не собирается: EOF пайпов может прийти только со
     /// смертью переживших ребёнка процессов (см. параметр `stderrKillMarker`)
-    /// — буферы не читаются, строки результата пусты.
+    /// — буфер не читается, строка результата пуста. stderr собирается
+    /// снапшотом только в исходе «самостоятельный ненулевой exit без
+    /// таймаута» (единственный, где вызывающий читает деталь ошибки), без
+    /// ожидания EOF; в остальных исходах ветки пуст.
     let stderrMarkerSeen: Bool
 }
 
@@ -141,7 +144,9 @@ internal enum ChildProcessError: Error {
 /// рождения сабшелла-монитора) и отдаёт результат с `stderrMarkerSeen`,
 /// не дожидаясь EOF пайпов — их write-концы удерживают пережив ребёнка
 /// процессы (daemonизированный wireguard-go), EOF приходит лишь со смертью
-/// туннеля.
+/// туннеля. Исключение — самостоятельный ненулевой exit после маркера
+/// (провал PostUp): коротким ограниченным grace собирается снапшот уже
+/// прочитанного stderr без ожидания EOF (подробности — у ветки маркера).
 ///
 /// Маркер сверяется ЦЕЛОЙ строкой stderr (`stderrContainsLine`): wg-quick
 /// печатает настоящий маркер собственным `echo … >&2`, но каждый хук перед
@@ -252,6 +257,15 @@ internal func runChildProcess(
     var timedOut = false
     var exited = false
     var markerSeen = false
+    // Снапшот накопленного stderr под stateQueue: маркер-ветка читает его
+    // без гонки с drain-таском (писатель один, но чтение мимо очереди —
+    // data race). Обновление на каждый чанк, а не в конце — EOF может не
+    // прийти вовсе (write-конец держат пережив ребёнка процессы).
+    var stderrSnapshot = Data()
+    // Отдельная группа только для stderr-drain: маркер-ветке незачем ждать
+    // stdout (его write-конец переживает скрипт той же смертью, что и stderr,
+    // а общий `drained` сходится лишь со смертью всех держателей).
+    let stderrDrained = DispatchGroup()
 
     // Регистрация до run(): отмена, пришедшая до запуска, останавливает
     // ребёнка ещё до его рождения. Но отмена в окне между register и run
@@ -282,11 +296,13 @@ internal func runChildProcess(
     // (писатель один), флаг — под stateQueue, как `timedOut`/`exited`.
     let markerData = stderrKillMarker.map { Data($0.utf8) }
     drained.enter()
+    stderrDrained.enter()
     drainQueue.async {
         while true {
             let chunk = errPipe.fileHandleForReading.availableData
             if chunk.isEmpty { break }  // EOF
             errorData.append(chunk)
+            stateQueue.sync { stderrSnapshot = errorData }
             guard let markerData, stderrContainsLine(errorData, line: markerData) else { continue }
             let alreadySeen = stateQueue.sync { () -> Bool in
                 if markerSeen { return true }
@@ -304,6 +320,7 @@ internal func runChildProcess(
             }
         }
         drained.leave()
+        stderrDrained.leave()
     }
 
     // Двухступенчатый таймаут: TERM в дедлайн, KILL ещё через killGrace —
@@ -353,25 +370,52 @@ internal func runChildProcess(
     // По факту выхода мгновенен и гарантирует reaping зомби.
     process.waitUntilExit()
 
-    // Ветка маркера: настройка, которую он обозначает, завершена — вывод не
-    // собираем и drains не ждём (EOF удерживают пережив ребёнка процессы,
-    // см. опцию `stderrKillMarker`; дренирующие задачи завершатся с их
-    // смертью, ничего не течёт дальше числа живых туннелей). Маркер не
-    // гарантирует финал wg-quick (печатается до PostUp-хуков), поэтому в
-    // результате отдаются статус И причина завершения — окончательная
-    // классификация за вызывающим, как и во всех остальных ветках.
+    // Ветка маркера: настройка, которую он обозначает, завершена — drains не
+    // ждём (EOF удерживают пережив ребёнка процессы, см. опцию
+    // `stderrKillMarker`; дренирующие задачи завершатся с их смертью, ничего
+    // не течёт дальше числа живых туннелей). Маркер не гарантирует финал
+    // wg-quick (печатается до PostUp-хуков), поэтому в результате отдаются
+    // статус И причина завершения — окончательная классификация за вызывающим,
+    // как и во всех остальных ветках.
+    //
+    // Исключение — самостоятельный ненулевой exit без таймаута: единственный
+    // исход маркер-ветки, где вызывающий читает stderr (провал PostUp — деталь
+    // `.failed`, на wire не идёт, лог демона — единственный канал диагностики,
+    // отдавать его пустым значило бы терять причину провала целиком). Хвост
+    // собирается без ожидания EOF: короткий grace на дочитывание уже
+    // записанного в пайп (последние байты ребёнок пишет до выхода, а читает их
+    // drain-таск асинхронно), затем снапшот накопленного. Grace ограничен и
+    // сам по себе, и остатком общего бюджета — пережив ребёнка держатель
+    // write-конца держит его вечно, ждать бессмысленно, а бюджет ответа демона
+    // неприкосновенен. Остальные исходы ветки (убитый нами скрипт-`wait`,
+    // self-exit 0, таймаут-латч) stderr не читают — результат пуст, как прежде.
     if stateQueue.sync(execute: { markerSeen }) {
         // Отмена задачи важнее и здесь: shutdown демона уже TERM'ит ребёнка,
         // результат никому не адресован — не отвечаем «успехом по маркеру».
         if handle.isCancelled {
             throw ChildProcessError.cancelled
         }
+        let timedOutLatch = stateQueue.sync(execute: { timedOut })
+        var collectedStderr = ""
+        if !timedOutLatch,
+           process.terminationReason == .exit,
+           process.terminationStatus != 0 {
+            // Половина секунды — с запасом на пробуждение drain-таска: всё
+            // написанное умершим ребёнком уже лежит в пайпе, читается одним
+            // availableData.Grace обрезается остатком бюджета — суммарный
+            // ответ остаётся в прежних границах waitDeadline.
+            let markerStderrGrace: TimeInterval = 0.5
+            let remaining = max(0, waitDeadline.timeIntervalSinceNow)
+            let grace = min(markerStderrGrace, remaining)
+            _ = stderrDrained.wait(timeout: .now() + .milliseconds(Int(grace * 1000)))
+            collectedStderr = String(data: stateQueue.sync { stderrSnapshot }, encoding: .utf8) ?? ""
+        }
         return ChildProcessResult(
             stdout: "",
-            stderr: "",
+            stderr: collectedStderr,
             terminationStatus: process.terminationStatus,
             terminationReason: process.terminationReason,
-            timedOut: stateQueue.sync(execute: { timedOut }),
+            timedOut: timedOutLatch,
             stderrMarkerSeen: true
         )
     }

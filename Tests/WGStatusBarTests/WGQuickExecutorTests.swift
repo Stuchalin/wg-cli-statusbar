@@ -277,17 +277,19 @@ final class WGQuickExecutorTests: XCTestCase {
         )
     }
 
-    func testUpMarkerFollowedByNonZeroExitFails() async throws {
+    func testUpMarkerFollowedByNonZeroExitFailsWithStderrDetail() async throws {
         // Маркер печатается ДО PostUp-хуков wg-quick (cmd_up: monitor_daemon
         // → execute_hooks POST_UP), teardown-трап в этот момент ещё стоит:
         // под set -e сорвавшийся PostUp роняет скрипт, трап разбирает туннель,
         // exit ненулевой. Такой самостоятельный ненулевой exit — честный
         // провал, а не «успех по маркеру». Стаб печатает маркер, спит
-        // (гарантирует, что drain-таск зафиксирует маркер до выхода) и
-        // выходит с кодом 4 — раньше, чем наш KILL по задержке (мёртвому
-        // процессу сигнал не нужен).
+        // (гарантирует, что drain-таск зафиксирует маркер до выхода), печатает
+        // строку провала хука и выходит с кодом 4 — раньше, чем наш KILL по
+        // задержке (мёртвому процессу сигнал не нужен). Деталь обязана нести
+        // текст провала из stderr: на wire она не идёт, лог демона —
+        // единственный канал диагностики, «exit status 4» причину не называет.
         let stub = try makeStub(
-            script: "printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep 0.3; exit 4"
+            script: "printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep 0.3; printf 'postup hook failed\\n' 1>&2; exit 4"
         )
         let executor = makeExecutor(binaryPath: stub)
 
@@ -295,10 +297,51 @@ final class WGQuickExecutorTests: XCTestCase {
             try await executor.runUp(name: "work-vpn")
             XCTFail("маркер + самостоятельный ненулевой exit — провал wg-quick")
         } catch {
-            // В ветке маркера вывод не собирается (drains не ждём) — деталь
-            // из кода выхода, без stderr.
-            XCTAssertEqual(error as? WGQuickExecutorError, .failed("exit status 4"))
+            guard case .failed(let detail) = error as? WGQuickExecutorError else {
+                return XCTFail("ожидался failed, получено: \(error)")
+            }
+            XCTAssertTrue(
+                detail.contains("postup hook failed"),
+                "деталь обязана нести stderr провала, а не только код выхода: <\(detail)>"
+            )
         }
+    }
+
+    func testUpMarkerSelfExitFailureWithPipeHolderStillCarriesStderrDetail() async throws {
+        // Провал после маркера при живом держателе write-конца stderr
+        // (продакшн-форма: daemonизированный wireguard-go наследует пайпы
+        // wg-quick, EOF не приходит и после смерти скрипта): раннер не виснет
+        // и не уходит в abandoned — короткий grace дочитывает уже записанное
+        // в пайп, деталь провала доезжает до лога демона по снапшоту.
+        let stub = try makeStub(
+            script: """
+            sleep 5 &
+            printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2
+            sleep 0.3
+            printf 'postup hook failed\\n' 1>&2
+            exit 4
+            """
+        )
+        let executor = makeExecutor(binaryPath: stub)
+
+        let started = Date()
+        do {
+            try await executor.runUp(name: "work-vpn")
+            XCTFail("маркер + ненулевой exit при держателе пайпа — провал wg-quick")
+        } catch {
+            guard case .failed(let detail) = error as? WGQuickExecutorError else {
+                return XCTFail("ожидался failed, получено: \(error)")
+            }
+            XCTAssertTrue(
+                detail.contains("postup hook failed"),
+                "деталь обязана нести stderr провала и без EOF пайпа: <\(detail)>"
+            )
+        }
+        XCTAssertLessThan(
+            Date().timeIntervalSince(started),
+            4.5,
+            "возврат ограничен grace дочитывания (~старт zsh + 0.3 c + 0.5 c), а не смертью держателя (5 c) и не бюджетом (9 c)"
+        )
     }
 
     func testUpMarkerFollowedBySelfExitZeroSucceeds() async throws {
