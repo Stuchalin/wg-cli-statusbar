@@ -25,9 +25,10 @@ internal final class ChildProcessHandle {
         return true
     }
 
-    /// Отмена задачи: убить ребёнка, если он уже жив; kill несуществующему
-    /// pid безвреден, гонка с завершением процесса — тоже. Дальше — как в
-    /// таймауте: не умерший от TERM добивается SIGKILL'ом через grace.
+    /// Отмена задачи: убить ребёнка, если он ещё жив (поздняя отмена может
+    /// прийти после выхода и reaping — сигнал ушёл бы на переиспользованный
+    /// pid). Дальше — как в таймауте: не умерший от TERM добивается
+    /// SIGKILL'ом через grace.
     func cancel() {
         lock.lock()
         defer { lock.unlock() }
@@ -56,8 +57,11 @@ internal final class ChildProcessHandle {
     /// TERM живому ребёнку + SIGKILL через grace; только под локом. У ещё не
     /// запущенного процесса pid == 0, а kill(0, SIGTERM) шлёт сигнал всей
     /// группе процессов демона — сигнал только настоящему pid ребёнка.
+    /// Проверка `isRunning` сужает гонку переиспользования pid уже
+    /// завершившегося и reaped процесса (тот же образец, что у
+    /// `scheduleSigkill` и маркерного KILL).
     private func terminateChildLocked() {
-        guard let process else { return }
+        guard let process, process.isRunning else { return }
         let pid = process.processIdentifier
         guard pid > 0 else { return }
         kill(pid, SIGTERM)
