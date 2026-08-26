@@ -324,6 +324,35 @@ final class StatusItemControllerTests: XCTestCase {
         }
     }
 
+    func testServiceStateChangeReactionRequiresChangeAndOpenMenu() {
+        // Живая реакция на состояние сервиса (`serviceStateDidChange`): дозагрузка
+        // списка + пересборка нужны только при СМЕНЕ состояния И открытом меню —
+        // умерший при открытом меню демон оставил бы кликабельные строки (клик —
+        // гарантированный connectionRefused), закрывшееся меню соберётся свежим
+        // при следующем открытии, отсутствие смены — не событие вовсе.
+        let cases: [
+            (previous: ServiceState, current: ServiceState, isMenuOpen: Bool, expected: Bool)
+        ] = [
+            (.installed, .broken, true, true),
+            (.absent, .installed, true, true),
+            (.installed, .installed, true, false),
+            (.installed, .broken, false, false),
+            (.absent, .absent, false, false),
+        ]
+
+        for testCase in cases {
+            XCTAssertEqual(
+                StatusItemController.shouldReloadTunnelsAndRebuildMenu(
+                    previousServiceState: testCase.previous,
+                    currentServiceState: testCase.current,
+                    isMenuOpen: testCase.isMenuOpen
+                ),
+                testCase.expected,
+                "\(testCase.previous) → \(testCase.current), меню \(testCase.isMenuOpen ? "открыто" : "закрыто")"
+            )
+        }
+    }
+
     // MARK: - Изолированный билдер: NSMenuItem из структуры
 
     func testFactoryBuildsMenuItemsMatchingStructure() {

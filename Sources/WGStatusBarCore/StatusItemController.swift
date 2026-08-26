@@ -269,12 +269,26 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// connectionRefused), демон появился — список подтягивается, не дожидаясь
     /// переоткрытия меню. Закрытое меню соберётся свежим при следующем открытии.
     private func serviceStateDidChange() {
-        let serviceState = model.serviceState
-        guard serviceState != lastServiceState else { return }
-        lastServiceState = serviceState
-        guard isMenuOpen else { return }
+        defer { lastServiceState = model.serviceState }
+        guard Self.shouldReloadTunnelsAndRebuildMenu(
+            previousServiceState: lastServiceState,
+            currentServiceState: model.serviceState,
+            isMenuOpen: isMenuOpen
+        ) else { return }
         model.loadTunnels()
         rebuildMenu()
+    }
+
+    /// Решение о живой реакции на смену состояния сервиса — статически, чтобы
+    /// тестировать без создания `NSStatusItem` (как `performStatusAction`):
+    /// реагируем только на смену И только при открытом меню — закрытое
+    /// соберётся свежим при следующем открытии, отсутствие смены — не событие.
+    static func shouldReloadTunnelsAndRebuildMenu(
+        previousServiceState: ServiceState,
+        currentServiceState: ServiceState,
+        isMenuOpen: Bool
+    ) -> Bool {
+        currentServiceState != previousServiceState && isMenuOpen
     }
 
     /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg или устаревший

@@ -8,7 +8,11 @@ import XCTest
 /// в продакшне, поэтому стаб читает `$1`/`$2`. Отдельно пинируется инъекция
 /// PATH (главный продакшн-провал: под launchd у демона нет Homebrew в PATH,
 /// и wg-quick гибнет на системном bash 3.2 — юнит-стабы без PATH-теста
-/// проходят зелёными при мёртвой фиче).
+/// проходят зелёными при мёртвой фиче) и launchd-поведение `up`: успешный
+/// `up` darwin wg-quick не завершается сам (`wait` до смерти туннеля) —
+/// успех определяется маркером монитора в stderr (быстрый путь) или пробой
+/// `/var/run/wireguard` после таймаута; держатель пайпов (выживший ребёнок
+/// wg-quick) не клинит возврат.
 final class WGQuickExecutorTests: XCTestCase {
     /// Пишет исполняемый стаб-скрипт с zsh-shebang и возвращает его путь.
     private func makeStub(script: String) throws -> String {
@@ -22,7 +26,8 @@ final class WGQuickExecutorTests: XCTestCase {
         binaryPath: String,
         binaryExists: Bool = true,
         timeout: TimeInterval = 5,
-        killGrace: TimeInterval = 2
+        killGrace: TimeInterval = 2,
+        tunnelUpProbe: @escaping (String) -> Bool = { _ in false }
     ) -> WGQuickExecutor {
         WGQuickExecutor(
             resolver: WGQuickResolver(
@@ -30,7 +35,8 @@ final class WGQuickExecutorTests: XCTestCase {
                 fileExists: { _ in binaryExists }
             ),
             timeout: timeout,
-            killGrace: killGrace
+            killGrace: killGrace,
+            tunnelUpProbe: tunnelUpProbe
         )
     }
 
@@ -163,6 +169,300 @@ final class WGQuickExecutorTests: XCTestCase {
         )
     }
 
+    func testUpGracefulExitZeroAfterTermSucceedsWithoutProbe() async throws {
+        // Успевший завершиться после TERM exit 0 (аккуратный wg-quick с
+        // trap'ом) — это собственное честное завершение, а не наш SIGKILL:
+        // исход уходит в classify и отвечает ok, проба не консультируется.
+        // Стаб крутит собственный цикл шелла, а не внешний sleep: POSIX-шеллы
+        // (и zsh) откладывают trap до конца текущей внешней команды — со
+        // `sleep 30` trap не успевает до нашего SIGKILL, и ветка недостижима.
+        var probeCount = 0
+        let stub = try makeStub(script: "trap 'exit 0' TERM; while :; do :; done")
+        let executor = makeExecutor(
+            binaryPath: stub,
+            timeout: 1.5,
+            killGrace: 0.5,
+            tunnelUpProbe: { _ in probeCount += 1; return false }
+        )
+
+        try await executor.runUp(name: "work-vpn")
+
+        XCTAssertEqual(probeCount, 0, "exit 0 после TERM — успех classify, проба не нужна")
+    }
+
+    func testUpMarkerAndTimeoutRaceFallsThroughToProbe() async throws {
+        // Гонка «TERM op-таймаута раньше нашего marker-KILL» (маркер в
+        // последнюю секунду бюджета): маркер-ветка исход не забирает
+        // (timedOut-латч стоит), а в timeout-ветке судьбу решает проба —
+        // TERM-трап wg-quick мог уже снести туннель, сам по себе exit 0
+        // ничего не доказывает. Проба видит туннель мёртвым → честный
+        // timedOut. Статус здесь ровно 0 (trap срабатывает в собственном
+        // цикле шелла, не в ожидании внешней команды — со `sleep` trap
+        // отложился бы за наш SIGKILL): исход держится ТОЛЬКО дизъюнктом
+        // `stderrMarkerSeen` — без него classify ответил бы ложный ok.
+        var probeCount = 0
+        let stub = try makeStub(
+            script: """
+            sleep 0.5
+            printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2
+            trap 'exit 0' TERM
+            while :; do :; done
+            """
+        )
+        let executor = makeExecutor(
+            binaryPath: stub,
+            timeout: 1.5,
+            killGrace: 0.5,
+            tunnelUpProbe: { _ in probeCount += 1; return false }
+        )
+
+        do {
+            try await executor.runUp(name: "work-vpn")
+            XCTFail("гонка маркер/TERM с мёртвым туннелем — честный timedOut, не ok")
+        } catch {
+            XCTAssertEqual(error as? WGQuickExecutorError, .timedOut)
+        }
+        XCTAssertEqual(probeCount, 1, "исход гонки решает проба живого туннеля")
+    }
+
+    func testDownTimeoutWithoutPipeHolderStaysTimedOut() async throws {
+        // Регрессия классификации: ребёнок умирает от TERM op-таймаута сам,
+        // пайпов никто не держит (exec — нет осиротевших детей), drains
+        // сходятся — результат приходит путём данных, а не abandoned. Такой
+        // `down` обязан отвечать timedOut (процесс убили МЫ), а не
+        // `failed("exit status 15")` из classify.
+        let stub = try makeStub(script: "exec /bin/sleep 30")
+        let executor = makeExecutor(binaryPath: stub, timeout: 1.5, killGrace: 0.5)
+
+        do {
+            try await executor.runDown(name: "work-vpn")
+            XCTFail("зависший down должен падать по таймауту")
+        } catch {
+            XCTAssertEqual(error as? WGQuickExecutorError, .timedOut)
+        }
+    }
+
+    // MARK: - launchd-ветка wg-quick: успешный `up` не завершается сам
+
+    func testUpSucceedsOnMonitorMarkerAndKillsHangingScript() async throws {
+        // Продакшн-поведение darwin wg-quick под root: `detect_launchd`
+        // находит `domain =` в `launchctl procinfo` и финальный `wait` держит
+        // скрипт живым, пока жив туннель (проверено на живой машине: скрипт
+        // висит сутками). Стаб имитирует это: печатает маркер монитора в
+        // stderr и засыпает. Исполнитель обязан увидеть маркер, добить скрипт
+        // и ответить успехом СРАЗУ — не по op-таймауту и не зависнув вовсе.
+        let pidFile = NSTemporaryDirectory().appending("wgstatusbar-wgquick-marker-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let stub = try makeStub(
+            script: "printf '%s\\n' $$ > \(pidFile); printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep 30"
+        )
+        let executor = makeExecutor(binaryPath: stub)
+
+        let started = Date()
+        try await executor.runUp(name: "work-vpn")
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(
+            elapsed,
+            4,
+            "успех по маркеру приходит за ~старт zsh + задержка KILL (~2 c), а не по таймауту 5 c"
+        )
+
+        let pidData = try String(contentsOfFile: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(Int32(pidData), "стаб должен записать свой pid")
+        XCTAssertTrue(
+            Self.waitUntilProcessDies(pid, within: 3),
+            "скрипт \(pid) обязан быть добит SIGKILL после маркера — иначе висит в wait вечно"
+        )
+    }
+
+    func testUpMarkerFollowedByNonZeroExitFails() async throws {
+        // Маркер печатается ДО PostUp-хуков wg-quick (cmd_up: monitor_daemon
+        // → execute_hooks POST_UP), teardown-трап в этот момент ещё стоит:
+        // под set -e сорвавшийся PostUp роняет скрипт, трап разбирает туннель,
+        // exit ненулевой. Такой самостоятельный ненулевой exit — честный
+        // провал, а не «успех по маркеру». Стаб печатает маркер, спит
+        // (гарантирует, что drain-таск зафиксирует маркер до выхода) и
+        // выходит с кодом 4 — раньше, чем наш KILL по задержке (мёртвому
+        // процессу сигнал не нужен).
+        let stub = try makeStub(
+            script: "printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep 0.3; exit 4"
+        )
+        let executor = makeExecutor(binaryPath: stub)
+
+        do {
+            try await executor.runUp(name: "work-vpn")
+            XCTFail("маркер + самостоятельный ненулевой exit — провал wg-quick")
+        } catch {
+            // В ветке маркера вывод не собирается (drains не ждём) — деталь
+            // из кода выхода, без stderr.
+            XCTAssertEqual(error as? WGQuickExecutorError, .failed("exit status 4"))
+        }
+    }
+
+    func testUpMarkerFollowedBySelfExitZeroSucceeds() async throws {
+        // Будущий wg-quick без launchd-`wait`, завершающийся сам после
+        // маркера с нулём, — это успех: маркер-ветка чтит самостоятельный
+        // exit 0 наравне с убийством зависшего скрипта. Стаб выходит раньше
+        // KILL-задержки (мёртвому процессу сигнал не нужен).
+        let stub = try makeStub(
+            script: "printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep 0.3; exit 0"
+        )
+        let executor = makeExecutor(binaryPath: stub)
+
+        try await executor.runUp(name: "work-vpn")
+    }
+
+    func testUpPostUpHookSlowerThanKillGraceReturnsOk() async throws {
+        // Обратная сторона grace-окна upMonitorKillDelay: PostUp-хук медленнее
+        // паузы убивается вместе со скриптом ДО своего ненулевого exit —
+        // ответ ok, поздний провал осиротевшего хука ненаблюдаем по дизайну
+        // (бюджет ответа демона конечен, хуки — нет; полный разбор — у
+        // константы upMonitorKillDelay). Sleep здесь всегда на 1.5 с дольше
+        // grace: «провал» не успевает выйти сам, KILL приходит посреди хука.
+        // Регресс в любую сторону ловится: сломанный marker-KILL даст хуку
+        // выйти самому → .failed; выросший grace — тоже (sleep привязан к
+        // константе).
+        let stub = try makeStub(
+            script: "printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep \(WGQuickExecutor.upMonitorKillDelay + 1.5); exit 4"
+        )
+        let executor = makeExecutor(binaryPath: stub)
+
+        try await executor.runUp(name: "work-vpn")
+    }
+
+    func testUpMarkerSubstringInsideForeignStderrLineDoesNotTriggerMarkerKill() async throws {
+        // Регрессия подстрочной сверки маркера: wg-quick печатает каждый хук
+        // в stderr ДО выполнения (`echo "[#] $hook" >&2` из execute_hooks),
+        // а PreUp-хуки бегут в cmd_up ДО set_config/адресов/маршрутов/DNS и
+        // настоящего маркера — хук, чей текст или вывод несёт подстроку
+        // маркера, не изображает завершение настройки: ранний marker-KILL
+        // отвечал бы ложным ok на полуподнятом туннеле (голый utun от
+        // add_if: без конфига, маршрутов, DNS и монитора). Обе формы
+        // подстрочного вхождения — эхо хука `[#] …` и произвольная строка с
+        // маркером внутри — обязаны уйти в честный таймаут. Таймаут 3 c
+        // больше «маркер + KILL» (~1.5 c) с запасом: при регрессе ok пришёл
+        // бы заведомо раньше TERM — тест падает на XCTFail, не флэжит.
+        let stub = try makeStub(
+            script: """
+            printf '%s\\n' '[#] echo "\(WGQuickExecutor.upMonitorMarker)"; sleep 2' 1>&2
+            printf 'setup: %s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2
+            sleep 30
+            """
+        )
+        let executor = makeExecutor(binaryPath: stub, timeout: 3, killGrace: 0.5)
+
+        do {
+            try await executor.runUp(name: "work-vpn")
+            XCTFail("подстрока маркера в чужой строке stderr — не сигнал завершения настройки")
+        } catch {
+            XCTAssertEqual(error as? WGQuickExecutorError, .timedOut)
+        }
+    }
+
+    func testUpMarkerAfterForeignLinesAndSplitAcrossWritesStillMatches() async throws {
+        // Продакшн-форма маркера, а не «единственная строка одним printf»:
+        // перед маркером в stderr идут строки-эхо хуков `[#] …`, а drain
+        // читает stderr чанками — маркер может разорваться границей чанка
+        // (поэтому сверяется весь накопленный буфер, а не последний чанк).
+        // Стаб печатает чужую строку, затем маркер двумя порциями с паузой —
+        // ok обязан прийти по маркеру (~2 c), а не по таймауту.
+        let marker = WGQuickExecutor.upMonitorMarker
+        let splitAt = marker.index(marker.startIndex, offsetBy: marker.count / 2)
+        let head = String(marker[..<splitAt])
+        let tail = String(marker[splitAt...])
+        let stub = try makeStub(
+            script: """
+            printf '%s\\n' '[#] PreUp = echo configuring' 1>&2
+            printf '%s' '\(head)' 1>&2
+            sleep 0.3
+            printf '%s\\n' '\(tail)' 1>&2
+            sleep 30
+            """
+        )
+        let executor = makeExecutor(binaryPath: stub, timeout: 4, killGrace: 0.5)
+
+        let started = Date()
+        try await executor.runUp(name: "work-vpn")
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(
+            elapsed,
+            3.5,
+            "маркер после чужих строк и разорванный границей чанка обязан давать быстрый ok (~2 c), а не таймаут 4 c"
+        )
+    }
+
+    func testUpTimeoutWithLiveTunnelProbeSucceeds() async throws {
+        // Запасной путь при дрейфе текста маркера в будущих версиях wg-quick:
+        // маркер не совпал, op-таймаут убил скрипт уже ПОСЛЕ настройки —
+        // проба `/var/run/wireguard/<name>.name` + `<utun>.sock` видит туннель
+        // → успех, а не ложный timedOut при реально поднятом туннеле.
+        let pidFile = NSTemporaryDirectory().appending("wgstatusbar-wgquick-probe-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let stub = try makeStub(script: "printf '%s\\n' $$ > \(pidFile); sleep 30")
+        let executor = makeExecutor(binaryPath: stub, timeout: 1.5, killGrace: 0.5, tunnelUpProbe: { _ in true })
+
+        try await executor.runUp(name: "work-vpn")
+
+        let pidData = try String(contentsOfFile: pidFile, encoding: .utf8)
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let pid = try XCTUnwrap(Int32(pidData), "стаб должен записать свой pid")
+        XCTAssertTrue(Self.waitUntilProcessDies(pid, within: 3), "скрипт \(pid) должен быть убит по таймауту")
+    }
+
+    func testUpAbandonedWithLiveTunnelProbeSucceeds() async throws {
+        // Самый продакшн-реальный путь fallback при дрейфе текста маркера:
+        // дрейф → op-таймаут убил скрипт уже ПОСЛЕ настройки → пережив его
+        // daemonизированный wireguard-go держит write-концы пайпов → EOF не
+        // приходит до конца бюджета → раннер отдаёт abandoned, и судьбу
+        // решает проба живого туннеля: поднят → медленный, но честный ok.
+        // (Держатель `sleep 5 &` жив дольше бюджета 1.5 + 2×0.5 = 2.5 c.)
+        var probedNames: [String] = []
+        let stub = try makeStub(script: "sleep 5 & sleep 30")
+        let executor = makeExecutor(
+            binaryPath: stub,
+            timeout: 1.5,
+            killGrace: 0.5,
+            tunnelUpProbe: { probedNames.append($0); return true }
+        )
+
+        try await executor.runUp(name: "work-vpn")
+
+        XCTAssertEqual(
+            probedNames,
+            ["work-vpn"],
+            "abandoned для up обязан советоваться с пробой живого туннеля и отвечать ok при поднятом"
+        )
+    }
+
+    func testPipeHoldingSurvivorBoundsExecutorReturn() async throws {
+        // Регрессия клина accept-loop: пережив ребёнок процесс (daemonизированный
+        // wireguard-go наследует stdout/stderr wg-quick) держит write-концы
+        // пайпов — EOF не приходит и после выхода скрипта. Ожидание drains
+        // обязано быть ограничено бюджетом (abandoned → timedOut), иначе один
+        // такой `up` навсегда клинил бы последовательный цикл демона. Стаб
+        // выходит мгновенно, оставив держателя на 5 c — дольше бюджета.
+        let stub = try makeStub(script: "sleep 5 & exit 1")
+        let executor = makeExecutor(binaryPath: stub, timeout: 1.5, killGrace: 0.5)
+
+        let started = Date()
+        do {
+            try await executor.runDown(name: "work-vpn")
+            XCTFail("ненулевой exit с несходящимися drains обязан давать ошибку")
+        } catch {
+            XCTAssertEqual(error as? WGQuickExecutorError, .timedOut)
+        }
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertLessThan(
+            elapsed,
+            4.5,
+            "возврат ограничен бюджетом 1.5 + 2×0.5 = 2.5 c, а не смертью держателя пайпа (5 c)"
+        )
+    }
+
     // MARK: - отмена задачи
 
     func testTaskCancellationThrowsCancellationErrorAndKillsChild() async throws {
@@ -182,6 +482,41 @@ final class WGQuickExecutorTests: XCTestCase {
         // Замещённое окружение (PATH) стартует zsh-стаб медленнее (~0.5 c до
         // первой строки) — отменяем строго после записи pid, а не по сну.
         let pid = try Self.waitForPidFile(pidFile, within: 5)
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("отменённая задача должна бросать")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "ожидалась CancellationError, получено: \(error)")
+        }
+
+        XCTAssertTrue(
+            Self.waitUntilProcessDies(pid, within: 3),
+            "процесс \(pid) должен быть убит по отмене задачи"
+        )
+    }
+
+    func testTaskCancellationAfterMarkerStillThrowsCancellation() async throws {
+        // Отмена задачи обязана выигрывать и в маркер-ветке раннера: shutdown
+        // демона посреди `up` с уже увиденным маркером — «успех по маркеру»
+        // адресован никому (фантомный ok в отменённую задачу), бросаем
+        // CancellationError. Пауза после pid-файла даёт drain-таске
+        // зафиксировать маркер; исход стабилен и без неё (отмена важнее и в
+        // data-пути раннера), пауза сужает проверку до целевой ветки.
+        let pidFile = NSTemporaryDirectory().appending("wgstatusbar-wgquick-marker-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let stub = try makeStub(
+            script: "printf '%s\\n' $$ > \(pidFile); printf '%s\\n' '\(WGQuickExecutor.upMonitorMarker)' 1>&2; sleep 30"
+        )
+        let executor = makeExecutor(binaryPath: stub, timeout: 30)
+
+        let task = Task.detached(priority: .medium) {
+            try await executor.runUp(name: "work-vpn")
+        }
+
+        let pid = try Self.waitForPidFile(pidFile, within: 5)
+        Thread.sleep(forTimeInterval: 0.6)
         task.cancel()
 
         do {
@@ -296,6 +631,79 @@ final class WGQuickExecutorTests: XCTestCase {
         if let stubIndex, let systemIndex {
             XCTAssertLessThan(stubIndex, systemIndex, "директория wg-quick обязана идти впереди системных путей")
         }
+    }
+
+    // MARK: - проба «туннель поднят» (fallback при дрейфе маркера)
+
+    func testTunnelIsUpRequiresSocketAndMtimeCorrelation() {
+        // Семантика get_real_interface wg-quick один-в-один: непустой `utun*`
+        // в `.name`, `.sock` — настоящий сокет (`-S`, не обычный файл), mtime
+        // пары расходится меньше 2 c. Фейковая FS — словарь описаний файлов.
+        struct FakeFile {
+            var content: String?
+            var type: FileAttributeType
+            var modified: Date
+        }
+        let base = Date()
+        func makeProbe(files: [String: FakeFile]) -> Bool {
+            WGQuickExecutor.tunnelIsUp(
+                name: "work-vpn",
+                runtimeDirectory: "/run/wg",
+                fileContents: { files[$0]?.content },
+                fileAttributes: { path in
+                    guard let file = files[path] else { return nil }
+                    return [.type: file.type, .modificationDate: file.modified]
+                }
+            )
+        }
+        func nameFile(
+            _ content: String? = "utun7\n",
+            modified: Date = base
+        ) -> FakeFile {
+            FakeFile(content: content, type: .typeRegular, modified: modified)
+        }
+        func sockFile(
+            type: FileAttributeType = .typeSocket,
+            modified: Date = base
+        ) -> FakeFile {
+            FakeFile(content: nil, type: type, modified: modified)
+        }
+
+        XCTAssertTrue(
+            makeProbe(files: ["/run/wg/work-vpn.name": nameFile(), "/run/wg/utun7.sock": sockFile()]),
+            "пара .name→utun + сокет с согласованными mtime — туннель поднят"
+        )
+        XCTAssertFalse(
+            makeProbe(files: [:]),
+            "без .name туннеля нет"
+        )
+        XCTAssertFalse(
+            makeProbe(files: ["/run/wg/work-vpn.name": nameFile()]),
+            ".sock нет — туннель мёртв"
+        )
+        XCTAssertFalse(
+            makeProbe(
+                files: ["/run/wg/work-vpn.name": nameFile(), "/run/wg/utun7.sock": sockFile(type: .typeRegular)]
+            ),
+            ".sock — обычный файл, не сокет (`-S` из get_real_interface)"
+        )
+        XCTAssertFalse(
+            makeProbe(
+                files: [
+                    "/run/wg/work-vpn.name": nameFile(modified: base),
+                    "/run/wg/utun7.sock": sockFile(modified: base.addingTimeInterval(3)),
+                ]
+            ),
+            "mtime пары разошлись на 3 c — пара пережила свой туннель"
+        )
+        XCTAssertFalse(
+            makeProbe(files: ["/run/wg/work-vpn.name": nameFile("\n"), "/run/wg/.sock": sockFile()]),
+            "пустой .name — туннеля нет"
+        )
+        XCTAssertFalse(
+            makeProbe(files: ["/run/wg/work-vpn.name": nameFile("en0\n"), "/run/wg/en0.sock": sockFile()]),
+            "не utun в .name — пара wg-quick не валидна"
+        )
     }
 
     /// Поллит `kill(pid, 0)` до ESRCH: зомби считается живым, пока статус

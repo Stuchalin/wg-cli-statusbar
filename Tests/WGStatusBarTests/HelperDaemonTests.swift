@@ -482,6 +482,9 @@ final class HelperDaemonTests: XCTestCase {
             (WGQuickExecutorError.quickMissing, .quickMissing),
             (WGQuickExecutorError.timedOut, .wgFailed),
             (WGQuickExecutorError.failed("wg-quick echo: PrivateKey = SECRETPSK\nwg: invalid config"), .wgFailed),
+            // Default-ветка: чужая ошибка (не WGQuickExecutorError) — лог в
+            // stderr демона + err wg-failed без детали, как и типизированные.
+            (NSError(domain: "HelperDaemonTests", code: 42), .wgFailed),
         ]
         let store = makeConfigStore(names: ["kvmka-ai"])
         let tunnelExecutor = StubTunnelExecutor()
