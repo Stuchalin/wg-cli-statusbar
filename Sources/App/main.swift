@@ -12,7 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItemController: StatusItemController?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
-        installer.onSuccess = { [weak model] in model?.refresh() }
+        // Свежеустановленный/обновлённый демон: карточка оживает сразу, не
+        // дожидаясь тика. Отдельный loadTunnels здесь не нужен (и был бы
+        // мёртвым: refresh завершится позже асинхронно, а его guard успевает
+        // увидеть только прошлое serviceState) — список подтянет переход
+        // serviceState при открытом меню (StatusItemController) либо
+        // ближайшее открытие меню (menuNeedsUpdate).
+        installer.onSuccess = { [weak model] in
+            model?.refresh()
+        }
         installer.onFailure = { [weak model] message in model?.reportServiceFailure(message) }
         statusItemController = StatusItemController(model: model, installer: installer)
     }

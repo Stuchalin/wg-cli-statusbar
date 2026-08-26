@@ -14,9 +14,21 @@ final class HelperProtocolTests: XCTestCase {
     }
 
     func testDecodeOkWithEmptyDump() {
+        // Пустой payload — это и «интерфейсов нет» для show, и успех up/down
+        // (туннельные операции отвечают `ok` без payload).
         XCTAssertEqual(
             decode(response: "ok 1 5\n"),
             .ok(protocolVersion: 1, build: 5, dump: "")
+        )
+    }
+
+    func testDecodeOkWithNameListPayload() {
+        // Ответ `list`: имена по одному в строке, каждое завершено `\n` —
+        // проходит те же правила, что и дамп show.
+        let names = "kvmka-ai\nkvmka-full\n"
+        XCTAssertEqual(
+            decode(response: "ok 1 9\n\(names)"),
+            .ok(protocolVersion: 1, build: 9, dump: names)
         )
     }
 
@@ -49,6 +61,30 @@ final class HelperProtocolTests: XCTestCase {
         )
     }
 
+    func testDecodeErrQuickMissing() {
+        // Демон шлёт этот код без детали (stderr wg-quick остаётся в его логе),
+        // но decode умеет и вариант с ней.
+        XCTAssertEqual(
+            decode(response: "err 1 9 wg-quick-missing\n"),
+            .err(protocolVersion: 1, build: 9, code: .quickMissing, detail: nil)
+        )
+        XCTAssertEqual(
+            decode(response: "err 1 9 wg-quick-missing not in search paths\n"),
+            .err(protocolVersion: 1, build: 9, code: .quickMissing, detail: "not in search paths")
+        )
+    }
+
+    func testDecodeErrTunnelNotFound() {
+        XCTAssertEqual(
+            decode(response: "err 1 9 tunnel-not-found\n"),
+            .err(protocolVersion: 1, build: 9, code: .tunnelNotFound, detail: nil)
+        )
+        XCTAssertEqual(
+            decode(response: "err 1 9 tunnel-not-found no config for name\n"),
+            .err(protocolVersion: 1, build: 9, code: .tunnelNotFound, detail: "no config for name")
+        )
+    }
+
     // MARK: - decode: мусор → nil
 
     func testDecodeMalformedResponseReturnsNil() {
@@ -67,7 +103,9 @@ final class HelperProtocolTests: XCTestCase {
             "err 1 5 unknown-code",
             "err abc 5 wg-missing",
             "err 1 xyz wg-failed",
+            "err 1 9 wgquick-missing\n", // опечатка в wire-имени нового кода
             "ok 1 5 wg-missing\nline", // код ошибки в ok-заголовке — мусор
+            "ok 1 9 tunnel-not-found\nline",
         ]
         for response in malformed {
             XCTAssertNil(
@@ -103,6 +141,12 @@ final class HelperProtocolTests: XCTestCase {
 
     func testEncodeShowRequest() {
         XCTAssertEqual(encode(.show), "show\n")
+    }
+
+    func testEncodeTunnelRequests() {
+        XCTAssertEqual(encode(.list), "list\n")
+        XCTAssertEqual(encode(.up("kvmka-ai")), "up kvmka-ai\n")
+        XCTAssertEqual(encode(.down("kvmka-full")), "down kvmka-full\n")
     }
 
     // MARK: - Константы версий

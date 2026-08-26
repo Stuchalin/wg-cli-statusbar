@@ -267,6 +267,23 @@ final class SocketWGShowRunnerTests: XCTestCase {
         await assertRunDumpThrows(.badResponse, runner: SocketWGShowRunner(socketPath: eofPath))
     }
 
+    func testTunnelOpCodesWithMatchingVersionsMapToGenericUnreachable() async throws {
+        // Защитные ветки interpret: коды list/up/down не отвечают show, но при
+        // совпадающих версиях маппятся в общую строку недоступности, а не в
+        // daemonOutdated (сверка версий тут уже прошла).
+        for code in ["wg-quick-missing", "tunnel-not-found"] {
+            let socketPath = makeSocketPath()
+            try serveOneConnection(
+                path: socketPath,
+                response: "err \(helperProtocolVersion) \(helperBuildNumber) \(code)\n"
+            )
+            await assertRunDumpThrows(
+                .generic(L10n.string("error.service_unreachable")),
+                runner: SocketWGShowRunner(socketPath: socketPath)
+            )
+        }
+    }
+
     // MARK: - версии заголовка → daemonOutdated
 
     func testForeignHeaderVersionsMapToDaemonOutdated() async throws {

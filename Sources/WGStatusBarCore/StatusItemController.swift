@@ -6,7 +6,6 @@ import SwiftUI
 enum StatusMenuAction: Int, Equatable {
     case refresh = 1
     case openConfigs = 2
-    case manageTunnels = 3
     case quit = 4
     case installService = 5
     case uninstallService = 6
@@ -25,6 +24,13 @@ extension InstallerService: ServiceInstalling {}
 /// Пункт-карточка не подсвечивается нативно: своё состояние рисует SwiftUI-контент
 /// (референс CodexBar — `MenuCardMenuItem` с `isHighlighted == false`).
 final class CardMenuItem: NSMenuItem {
+    override var isHighlighted: Bool { false }
+}
+
+/// Пункт-строка туннеля: как карточка, не подсвечивается нативно и клик
+/// внутри не закрывает меню — клики обрабатывает SwiftUI-контент
+/// (`TunnelRowView` → toggle).
+final class TunnelMenuItem: NSMenuItem {
     override var isHighlighted: Bool { false }
 }
 
@@ -49,6 +55,11 @@ enum StatusIcon {
 enum StatusMenuStructure {
     enum Entry: Equatable {
         case card
+        /// Заголовок секции Tunnels (не действие).
+        case tunnelsHeader(title: String)
+        /// Строка туннеля: данные на момент сборки (текущее состояние вью
+        /// выводит из модели живьём).
+        case tunnelRow(TunnelInfo, isEnabled: Bool)
         case action(
             id: StatusMenuAction,
             title: String,
@@ -59,29 +70,48 @@ enum StatusMenuStructure {
         case separator
     }
 
-    /// Карточка → разделитель → Обновить/Конфиги/Управление → разделитель →
-    /// Сервис (по состоянию) → Выход. `refreshEnabled = false`, пока идёт
-    /// refresh (спиннер в карточке); пункт сервиса: `absent` → «Установить»,
-    /// `broken`/`outdated` → «Обновить» (переустановка), `installed` → «Удалить».
-    static func entries(refreshEnabled: Bool = true, serviceState: ServiceState = .absent) -> [Entry] {
-        [
+    /// Карточка → разделитель → Обновить/Конфиги → [Tunnels: заголовок +
+    /// строки] → разделитель → Сервис (по состоянию) → Выход.
+    /// `refreshEnabled = false`, пока идёт refresh (спиннер в карточке);
+    /// туннельная операция в полёте дополнительно отключает «Обновить»
+    /// (подавленный тик — молчаливый no-op), все строки (одна операция за
+    /// раз) и пункт сервиса — скрипт установки/удаления начинается с
+    /// `launchctl bootout`, и SIGTERM демону посреди операции оставил бы
+    /// полуприменённый туннель. Секция Tunnels видна только при живом демоне и непустом списке —
+    /// иначе её нет целиком, включая заголовок и разделители. Пункт сервиса:
+    /// `absent` → «Установить», `broken`/`outdated` → «Обновить»
+    /// (переустановка), `installed` → «Удалить».
+    static func entries(
+        refreshEnabled: Bool = true,
+        serviceState: ServiceState = .absent,
+        tunnels: [TunnelInfo] = [],
+        hasInFlightTunnelOperation: Bool = false
+    ) -> [Entry] {
+        var entries: [Entry] = [
             .card,
             .separator,
-            .action(id: .refresh, title: L10n.string("button.refresh"), keyEquivalent: "r", modifiers: .command, isEnabled: refreshEnabled),
+            .action(id: .refresh, title: L10n.string("button.refresh"), keyEquivalent: "r", modifiers: .command, isEnabled: refreshEnabled && !hasInFlightTunnelOperation),
             .action(id: .openConfigs, title: L10n.string("button.open_configs"), keyEquivalent: "o", modifiers: .command, isEnabled: true),
-            .action(id: .manageTunnels, title: L10n.string("button.tunnel_management_soon"), keyEquivalent: "", modifiers: [], isEnabled: false),
-            .separator,
-            serviceEntry(for: serviceState),
-            .action(id: .quit, title: L10n.string("button.quit"), keyEquivalent: "q", modifiers: .command, isEnabled: true),
         ]
+        if serviceState == .installed && !tunnels.isEmpty {
+            entries.append(.separator)
+            entries.append(.tunnelsHeader(title: L10n.string("menu.tunnels_section")))
+            for tunnel in tunnels {
+                entries.append(.tunnelRow(tunnel, isEnabled: !hasInFlightTunnelOperation))
+            }
+        }
+        entries.append(.separator)
+        entries.append(serviceEntry(for: serviceState, isEnabled: !hasInFlightTunnelOperation))
+        entries.append(.action(id: .quit, title: L10n.string("button.quit"), keyEquivalent: "q", modifiers: .command, isEnabled: true))
+        return entries
     }
 
     /// Пункт меню сервиса из состояния: демона нет — установить; не отвечает
     /// или устарел — обновить (скрипт установки идемпотентен, действие то же);
-    /// жив — удалить.
-    private static func serviceEntry(for state: ServiceState) -> Entry {
+    /// жив — удалить. Во время туннельной операции пункт отключён.
+    private static func serviceEntry(for state: ServiceState, isEnabled: Bool) -> Entry {
         let action = serviceAction(for: state)
-        return .action(id: action.id, title: action.title, keyEquivalent: "", modifiers: [], isEnabled: true)
+        return .action(id: action.id, title: action.title, keyEquivalent: "", modifiers: [], isEnabled: isEnabled)
     }
 
     /// Действие и заголовок пункта сервиса из состояния — единый источник для
@@ -99,18 +129,24 @@ enum StatusMenuStructure {
 }
 
 /// Изолированный билдер: собирает `NSMenuItem` из структуры меню.
-/// Карточка приходит через провайдер, чтобы тесты структуры не создавали `NSHostingView`.
+/// Карточка и строки туннелей приходят через провайдеры, чтобы тесты
+/// структуры не создавали `NSHostingView`.
 enum StatusMenuFactory {
     static func makeItems(
         from entries: [StatusMenuStructure.Entry],
         target: AnyObject?,
         action: Selector,
-        cardItemProvider: () -> NSMenuItem
+        cardItemProvider: () -> NSMenuItem,
+        tunnelItemProvider: (TunnelInfo, Bool) -> NSMenuItem
     ) -> [NSMenuItem] {
         entries.map { entry in
             switch entry {
             case .card:
                 return cardItemProvider()
+            case .tunnelsHeader(let title):
+                return makeTunnelsHeaderItem(title: title)
+            case .tunnelRow(let tunnel, let isEnabled):
+                return tunnelItemProvider(tunnel, isEnabled)
             case .separator:
                 return NSMenuItem.separator()
             case .action(let id, let title, let keyEquivalent, let modifiers, let isEnabled):
@@ -126,17 +162,37 @@ enum StatusMenuFactory {
             }
         }
     }
+
+    /// Заголовок секции Tunnels: неактивный нативный пункт с приглушённым
+    /// мелким шрифтом — группировка без отдельной view; `title` остаётся,
+    /// чтобы VoiceOver его читал.
+    private static func makeTunnelsHeaderItem(title: String) -> NSMenuItem {
+        let item = NSMenuItem()
+        item.title = title
+        item.isEnabled = false
+        item.attributedTitle = NSAttributedString(
+            string: title,
+            attributes: [
+                .font: NSFont.systemFont(ofSize: 11, weight: .semibold),
+                .foregroundColor: NSColor.secondaryLabelColor,
+            ]
+        )
+        return item
+    }
 }
 
 /// Владелец `NSStatusItem` (иконка on/off, текст статуса — в accessibilityLabel
 /// для VoiceOver) и `NSMenu` с AppKit-гибридом:
 /// первый пункт — SwiftUI-карточка `StatusCardView` в `NSHostingView`,
-/// ниже — нативные пункты со стандартной клавиатурной навигацией.
+/// ниже — нативные пункты со стандартной клавиатурной навигацией и секция
+/// Tunnels (строки-туннели в `NSHostingView`, клик — up/down через модель).
 ///
-/// Меню пересобирается в `menuNeedsUpdate` — при каждом открытии данные свежие.
-/// Контент карточки обновляется сам (`@ObservedObject` модели), контроллер
-/// реагирует на `objectWillChange` иконкой, состоянием пункта «Обновить»,
-/// пунктом сервиса (установить/обновить/удалить) и перемером высоты карточки.
+/// Меню пересобирается в `menuNeedsUpdate` — при каждом открытии данные свежие
+/// (включая `loadTunnels()`); изменение `tunnels` при открытом меню
+/// пересобирает секцию (list асинхронный). Контент карточки обновляется сам
+/// (`@ObservedObject` модели), контроллер реагирует на `objectWillChange`
+/// иконкой, состоянием пункта «Обновить», пунктом сервиса
+/// (установить/обновить/удалить) и перемером высоты карточки.
 ///
 /// Создавать на главном потоке (единственный владелец — AppDelegate приложения).
 public final class StatusItemController: NSObject, NSMenuDelegate {
@@ -149,6 +205,17 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     private let installer: ServiceInstalling
     private let statusItem: NSStatusItem
     private var cancellable: AnyCancellable?
+    /// Ответ `list` асинхронный: к моменту первой сборки меню список туннелей
+    /// ещё пуст — его прибытие пересобирает секцию в открытом меню.
+    private var tunnelsCancellable: AnyCancellable?
+    /// Меню сейчас открыто (`menuNeedsUpdate`…`menuDidClose`): пересборка по
+    /// изменению `tunnels` нужна только открытому — закрытое соберётся свежим
+    /// при следующем открытии.
+    private var isMenuOpen = false
+    /// Состояние сервиса последней реакции: смена при открытом меню меняет и
+    /// видимость секции Tunnels — без отслеживания секция жила бы своей
+    /// жизнью (пункт сервиса обновляется живьём отдельно).
+    private var lastServiceState: ServiceState = .absent
     private weak var menu: NSMenu?
     /// Хостинг-вью карточки последней сборки — для перемера высоты (ⓘ-легенда).
     private var cardHostingView: NSHostingView<StatusCardView>?
@@ -165,7 +232,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         updateStatusIcon()
 
         let menu = NSMenu()
-        // isEnabled задаём сами: «Управление тоннелями» — всегда disabled
+        // isEnabled задаём сами: заголовок секции Tunnels — всегда disabled
         menu.autoenablesItems = false
         menu.delegate = self
         self.menu = menu
@@ -177,10 +244,17 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         cancellable = model.objectWillChange
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.modelDidChange() }
+        // Отдельная подписка на `tunnels` (публикуется только по факту
+        // изменения — list/recompute, не каждый тик): прибытие списка или
+        // переворот isUp пересобирает секцию, пока меню открыто.
+        tunnelsCancellable = model.$tunnels
+            .receive(on: DispatchQueue.main)
+            .sink { [weak self] _ in self?.tunnelsDidChange() }
     }
 
     deinit {
         cancellable?.cancel()
+        tunnelsCancellable?.cancel()
         NSStatusBar.system.removeStatusItem(statusItem)
     }
 
@@ -189,6 +263,34 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         updateRefreshItemEnabledState()
         updateServiceItem()
         resizeCardToContent()
+        serviceStateDidChange()
+    }
+
+    /// Смена состояния сервиса при открытом меню меняет и секцию Tunnels:
+    /// демон умер — строки обязаны исчезнуть (клик по ним — гарантированный
+    /// connectionRefused), демон появился — список подтягивается, не дожидаясь
+    /// переоткрытия меню. Закрытое меню соберётся свежим при следующем открытии.
+    private func serviceStateDidChange() {
+        defer { lastServiceState = model.serviceState }
+        guard Self.shouldReloadTunnelsAndRebuildMenu(
+            previousServiceState: lastServiceState,
+            currentServiceState: model.serviceState,
+            isMenuOpen: isMenuOpen
+        ) else { return }
+        model.loadTunnels()
+        rebuildMenu()
+    }
+
+    /// Решение о живой реакции на смену состояния сервиса — статически, чтобы
+    /// тестировать без создания `NSStatusItem` (как `performStatusAction`):
+    /// реагируем только на смену И только при открытом меню — закрытое
+    /// соберётся свежим при следующем открытии, отсутствие смены — не событие.
+    static func shouldReloadTunnelsAndRebuildMenu(
+        previousServiceState: ServiceState,
+        currentServiceState: ServiceState,
+        isMenuOpen: Bool
+    ) -> Bool {
+        currentServiceState != previousServiceState && isMenuOpen
     }
 
     /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg или устаревший
@@ -208,17 +310,22 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     /// Загруженность меняется и при открытом меню (тик обновления работает
     /// в .common-режиме run loop) — состояние пункта «Обновить» синхронизируем
-    /// живьём, не дожидаясь пересборки в `menuNeedsUpdate`.
+    /// живьём, не дожидаясь пересборки в `menuNeedsUpdate`. Туннельная
+    /// операция в полёте глушит show-тик — клик по «Обновить» был бы молчаливым
+    /// no-op, пункт отключается вместе со строками.
     private func updateRefreshItemEnabledState() {
         guard let menu else { return }
         for item in menu.items where item.tag == StatusMenuAction.refresh.rawValue {
-            item.isEnabled = !model.isLoading
+            item.isEnabled = !model.isLoading && model.inFlightTunnels.isEmpty
         }
     }
 
     /// Состояние сервиса тоже выводится на каждом тике и может смениться при
     /// открытом меню (демон поднялся или умер): заголовок и действие пункта
-    /// синхронизируем живьём тем же маппингом, что и в сборке меню.
+    /// синхронизируем живьём тем же маппингом, что и в сборке меню. Здесь же —
+    /// кликабельность: клик по строке туннеля меню не закрывает, и операция,
+    /// стартовавшая в открытом меню, обязана тут же отключить пункт сервиса
+    /// (как «Обновить» в `updateRefreshItemEnabledState`).
     private func updateServiceItem() {
         guard let menu else { return }
         let action = StatusMenuStructure.serviceAction(for: model.serviceState)
@@ -229,30 +336,79 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         for item in menu.items where serviceTags.contains(item.tag) {
             item.tag = action.id.rawValue
             item.title = action.title
+            item.isEnabled = model.inFlightTunnels.isEmpty
         }
     }
 
     // MARK: - NSMenuDelegate
 
     public func menuNeedsUpdate(_ menu: NSMenu) {
+        isMenuOpen = true
+        // Список туннелей тянется при каждом открытии (list асинхронный —
+        // ответ пересоберёт секцию по подписке, если придёт после сборки).
+        model.loadTunnels()
         rebuildMenu()
     }
 
+    public func menuDidClose(_ menu: NSMenu) {
+        isMenuOpen = false
+    }
+
     // MARK: - Сборка меню
+
+    /// Список туннелей пришёл (или пересчитался isUp) — пересобираем меню,
+    /// пока оно открыто: иначе при первом открытии секция появилась бы только
+    /// со второго раза. Закрытое меню соберётся свежим при следующем открытии.
+    private func tunnelsDidChange() {
+        guard isMenuOpen else { return }
+        rebuildMenu()
+    }
 
     private func rebuildMenu() {
         guard let menu else { return }
         let items = StatusMenuFactory.makeItems(
             from: StatusMenuStructure.entries(
                 refreshEnabled: !model.isLoading,
-                serviceState: model.serviceState
+                serviceState: model.serviceState,
+                tunnels: model.tunnels,
+                hasInFlightTunnelOperation: !model.inFlightTunnels.isEmpty
             ),
             target: self,
             action: #selector(statusMenuAction(_:)),
-            cardItemProvider: makeCardItem
+            cardItemProvider: makeCardItem,
+            tunnelItemProvider: makeTunnelItem
         )
         menu.removeAllItems()
         items.forEach(menu.addItem)
+    }
+
+    /// Строка туннеля: SwiftUI-контент наблюдает модель — спиннер,
+    /// кликабельность и isUp обновляются живьём без пересборки меню.
+    /// `isEnabled` структуры (снапшот на момент сборки) вью не нужен:
+    /// состояние выводится из тех же источников модели.
+    private func makeTunnelItem(tunnel: TunnelInfo, isEnabled: Bool) -> NSMenuItem {
+        let rowView = TunnelRowView(model: model, tunnelName: tunnel.name) { [weak self] name in
+            self?.model.toggleTunnel(named: name)
+        }
+        let hostingView = NSHostingView(rootView: rowView)
+        // Высота строки фиксирована контентом — мерим fittingSize тем же
+        // приёмом, что и карточку.
+        hostingView.frame = NSRect(origin: .zero, size: NSSize(width: Self.cardWidth, height: 1))
+        let fittingSize = hostingView.fittingSize
+        hostingView.frame = NSRect(
+            origin: .zero,
+            size: NSSize(
+                width: max(Self.cardWidth, ceil(fittingSize.width)),
+                height: max(1, ceil(fittingSize.height))
+            )
+        )
+
+        let item = TunnelMenuItem()
+        item.title = ""
+        item.view = hostingView
+        // enabled, чтобы клики по строке (SwiftUI Button) доходили
+        item.isEnabled = true
+        return item
     }
 
     private func makeCardItem() -> NSMenuItem {
@@ -321,14 +477,22 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         installer: ServiceInstalling? = nil,
         quit: () -> Void
     ) {
+        // Установка/удаление во время туннельной операции — молчаливый no-op:
+        // скрипты стартуют с `launchctl bootout` → SIGTERM демону → отмена
+        // задачи исполнителя → SIGKILL wg-quick посреди применения адресов/
+        // маршрутов/DNS (полуприменённый туннель — исход, от которого операции
+        // специально защищены от отмены). Пункт меню отключается вместе со
+        // строками; guard — вторая линия, как one-op-guard в `toggleTunnel`
+        // (ре-рендер disabled асинхронен).
+        if action == .installService || action == .uninstallService {
+            guard model.inFlightTunnels.isEmpty else { return }
+        }
         switch action {
         case .refresh:
             // Кнопка «Обновить» — принудительный рескан имён туннелей
             model.refresh(forceNameRescan: true)
         case .openConfigs:
             model.openWireGuardConfigFolder()
-        case .manageTunnels:
-            break  // placeholder — управление туннелями появится позже
         case .installService:
             // «Установить» и «Обновить» — одно действие: скрипт установки
             // идемпотентен (bootout → cp → bootstrap). Промпт и разбор

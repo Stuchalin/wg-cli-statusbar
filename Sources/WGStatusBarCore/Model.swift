@@ -56,3 +56,17 @@ public struct WGPeer: Identifiable, Equatable {
         HandshakeFreshness.freshness(date: latestHandshake).isActive
     }
 }
+
+/// Туннель из конфигов wg-quick (демон, запрос `list`): имя = basename
+/// конфига. `isUp` — не данные демона, а вывод модели из текущего снапшота
+/// `wg show` (`WireGuardStatusModel.isTunnelUp(named:)`): пересчитывается на
+/// каждом успешном тике и каждом ответе `list`.
+public struct TunnelInfo: Equatable {
+    public let name: String
+    public let isUp: Bool
+
+    public init(name: String, isUp: Bool) {
+        self.name = name
+        self.isUp = isUp
+    }
+}

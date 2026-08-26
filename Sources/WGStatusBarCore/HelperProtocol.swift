@@ -8,17 +8,24 @@ public let helperProtocolVersion = 1
 /// Монотонный номер билда демона: бампируется с каждым релизом хелпера
 /// (release-чеклист). Приложение сравнивает его с ответом демона — устаревший
 /// бинарь предлагается обновить пунктом «Обновить сервис».
-public let helperBuildNumber = 8
+public let helperBuildNumber = 16
 
 /// Запрос приложения к демону (line-based: соединение = один запрос).
 public enum HelperRequest {
     case show
+    case list
+    case up(String)
+    case down(String)
 }
 
 /// Код ошибки из заголовка `err`.
 public enum HelperResponseCode: Equatable {
     case wgMissing
     case wgFailed
+    /// `wg-quick` не установлен (для туннельных операций up/down).
+    case quickMissing
+    /// Конфиг с таким именем не найден (имя не прошло валидацию демона).
+    case tunnelNotFound
 }
 
 /// Разобранный ответ демона; обе версии — в любом ответе, включая `err`
@@ -28,25 +35,36 @@ public enum HelperResponse: Equatable {
     case err(protocolVersion: Int, build: Int, code: HelperResponseCode, detail: String?)
 }
 
-/// Кодирует запрос в строку wire-протокола (`show\n`).
+/// Кодирует запрос в строку wire-протокола (`show\n`, `list\n`,
+/// `up <name>\n`, `down <name>\n`).
 public func encode(_ request: HelperRequest) -> String {
     switch request {
     case .show:
         return "show\n"
+    case .list:
+        return "list\n"
+    case .up(let name):
+        return "up \(name)\n"
+    case .down(let name):
+        return "down \(name)\n"
     }
 }
 
 /// Разбирает ответ демона: первая строка — заголовок
 /// (`ok <protocol> <build>` или `err <protocol> <build> <code> [деталь]`),
-/// всё после неё — dump (для `ok`). Текст не подошёл под формат → `nil`,
-/// вызывающий считает ответ битым.
+/// всё после неё — payload для `ok` (поле `dump`): дамп `show`, список имён
+/// туннелей `list` (по одному в строке, каждое с `\n`) или пусто (`up`/`down`
+/// отвечают успехом без payload). Правила для всех видов payload одни —
+/// они сформулированы для дампа и покрывают список имён и пустой ответ
+/// без правок. Текст не подошёл под формат → `nil`, вызывающий считает
+/// ответ битым.
 ///
 /// Усечённые ответы отвергаются: клиент читает до EOF, поэтому обрыв записи
 /// (демон умер посреди send) выглядит как «полный» ответ без терминатора.
-/// Терминатор заголовка обязателен, а дамп — пустой или завершённый
-/// переводом строки (`wg` терминирует каждую строку) — иначе заголовок
-/// `ok` без `\n` превратился бы в успех с пустым дампом, незавершённая
-/// последняя строка — в успех с частичным.
+/// Терминатор заголовка обязателен, а payload — пустой или завершённый
+/// переводом строки (`wg` терминирует каждую строку дампа, имена `list`
+/// уходят построчно) — иначе заголовок `ok` без `\n` превратился бы в успех
+/// с пустым payload, незавершённая последняя строка — в успех с частичным.
 public func decode(response: String) -> HelperResponse? {
     guard let headerEnd = response.firstIndex(of: "\n") else { return nil }
     let header = String(response[..<headerEnd])
@@ -78,6 +96,10 @@ public func decode(response: String) -> HelperResponse? {
             code = .wgMissing
         case "wg-failed":
             code = .wgFailed
+        case "wg-quick-missing":
+            code = .quickMissing
+        case "tunnel-not-found":
+            code = .tunnelNotFound
         default:
             return nil
         }

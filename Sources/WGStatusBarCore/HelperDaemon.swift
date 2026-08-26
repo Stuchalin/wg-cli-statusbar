@@ -73,24 +73,48 @@ public enum DaemonServerError: Error, CustomStringConvertible {
 /// одно соединение за раз — соединение = один запрос. `show` → дамп у
 /// исполнителя → санитизация (единственная точка, где секступаются секреты) →
 /// `ok <protocol> <build>` + дамп; ошибка исполнителя → `err` с кодом.
-/// Отключившийся или молчащий клиент не подвешивает цикл: EOF отменяет
-/// ожидание ребёнка, тишина закрывается по дедлайну чтения.
+/// `list` → имена конфигов wg-quick из `TunnelConfigStore` (`ok` + имена по
+/// одному в строке); `up`/`down` → валидация имени тем же стором →
+/// `WGQuickExecutor` (`ok` без payload). Ошибки туннельных операций — `err`
+/// только с кодом: деталь (stderr-хвост wg-quick) пишется в stderr демона,
+/// на wire не попадает. Туннельные операции не отменяются по EOF клиента
+/// (SIGTERM посреди `up` оставил бы полуприменённый туннель) и ограничены
+/// op-таймаутом исполнителя; отменяет их только shutdown сервера.
+/// Отключившийся или молчащий клиент `show` не подвешивает цикл: EOF
+/// отменяет ожидание ребёнка, тишина закрывается по дедлайну чтения.
 public final class DaemonServer {
     private let executor: WGShowExecuting
     private let socketPath: String
     /// Дедлайн на чтение команды и запись ответа (нечитающий клиент не должен
     /// подвесить последовательный цикл). Инжектится — короткий в тестах.
     private let readDeadline: TimeInterval
+    /// Каталог конфигов wg-quick: `list` и валидация имени перед up/down.
+    private let configStore: TunnelConfigStore
+    /// Исполнитель туннельных операций up/down.
+    private let tunnelExecutor: WGQuickExecuting
     private let cancelFlag = CancelFlag()
 
     /// Максимальная длина строки команды: запросы крошечные, мусор без `\n`
     /// не должен копиться бесконечно.
     private static let maxRequestLength = 1024
 
-    public init(executor: WGShowExecuting, socketPath: String, readDeadline: TimeInterval = 5) {
+    /// - Parameters:
+    ///   - executor: исполнитель `wg show` для запроса `show`.
+    ///   - configStore: стор конфигов wg-quick — имена для `list` и валидация
+    ///     имени до запуска `wg-quick` (стаб-FS в тестах).
+    ///   - tunnelExecutor: исполнитель `up`/`down` (стаб в тестах).
+    public init(
+        executor: WGShowExecuting,
+        socketPath: String,
+        readDeadline: TimeInterval = 5,
+        configStore: TunnelConfigStore = TunnelConfigStore(),
+        tunnelExecutor: WGQuickExecuting = WGQuickExecutor()
+    ) {
         self.executor = executor
         self.socketPath = socketPath
         self.readDeadline = readDeadline
+        self.configStore = configStore
+        self.tunnelExecutor = tunnelExecutor
     }
 
     public func run() async throws {
@@ -224,9 +248,24 @@ public final class DaemonServer {
             return
         }
 
-        switch command {
-        case "show":
+        // Первое слово — команда, остаток строки — её аргумент (у up/down —
+        // имя туннеля, с пробелами внутри — целиком: валидация их отсечёт).
+        // `show`/`list` аргументов не имеют — строка с хвостом остаётся
+        // неизвестной командой, как и до появления разбора.
+        let parts = command
+            .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
+            .map(String.init)
+        let head = parts.first ?? ""
+        let argument = parts.count > 1 ? parts[1] : nil
+
+        switch head {
+        case "show" where argument == nil:
             await serveShow(to: clientFD)
+        case "list" where argument == nil:
+            await serveList(to: clientFD)
+        case "up", "down":
+            // Отсутствующий аргумент — пустое имя: валидация его не пропустит.
+            await serveTunnel(command: head, name: argument ?? "", to: clientFD)
         default:
             // Разрыв после ответа: протокол — одно соединение = один запрос.
             _ = await Self.writeResponse(
@@ -235,6 +274,55 @@ public final class DaemonServer {
                 deadline: readDeadline
             )
         }
+    }
+
+    private func serveList(to clientFD: Int32) async {
+        // Скан заново на каждый запрос (конфиги живут своей жизнью); имена
+        // уже отфильтрованы regex wg-quick и отсортированы стором.
+        let payload = configStore.names()
+            .map { $0 + "\n" }
+            .joined()
+        _ = await Self.writeResponse(
+            fd: clientFD,
+            text: Self.okResponse(dump: payload),
+            deadline: readDeadline
+        )
+    }
+
+    /// `up`/`down <name>`: валидация (shape + наличие `.conf` — до запуска
+    /// процесса, иначе wg-quick трактует аргумент как путь к конфигу) →
+    /// исполнитель → `ok` без payload. Без `runDumpCancellingOnClientEOF`:
+    /// SIGTERM посреди `up` оставил бы полуприменённый туннель (адреса,
+    /// маршруты, DNS через networksetup) — отключившийся клиент операцию не
+    /// отменяет; её ограничивает op-таймаут исполнителя, отменяет только
+    /// shutdown сервера (пропагация отмены задачи — исполнитель убивает
+    /// ребёнка своим `onCancel`).
+    private func serveTunnel(command: String, name: String, to clientFD: Int32) async {
+        guard configStore.validate(name) else {
+            _ = await Self.writeResponse(
+                fd: clientFD,
+                text: Self.errResponse(code: "tunnel-not-found", detail: nil),
+                deadline: readDeadline
+            )
+            return
+        }
+
+        let response: String
+        do {
+            if command == "up" {
+                try await tunnelExecutor.runUp(name: name)
+            } else {
+                try await tunnelExecutor.runDown(name: name)
+            }
+            response = Self.okResponse(dump: "")
+        } catch is CancellationError {
+            // Shutdown сервера — отвечать некому.
+            return
+        } catch {
+            response = Self.tunnelErrResponse(command: command, name: name, for: error)
+        }
+        // Клиент мог уйти, пока шла операция: провал записи — не ошибка цикла.
+        _ = await Self.writeResponse(fd: clientFD, text: response, deadline: readDeadline)
     }
 
     private func serveShow(to clientFD: Int32) async {
@@ -357,6 +445,30 @@ public final class DaemonServer {
         default:
             return errResponse(code: "wg-failed", detail: error.localizedDescription)
         }
+    }
+
+    /// Ошибки up/down → `err` только с кодом, деталь на wire не попадает:
+    /// stderr-хвост wg-quick — эхо исполняемых команд (включая Pre/PostUp-хуки
+    /// из конфига) и цитаты строк конфига из ошибок дочернего wg — остаётся в
+    /// логе демона (stderr через plist уже уходит в
+    /// `/var/log/wgstatusbar-helper.log`), секреты не покидают демон.
+    private static func tunnelErrResponse(command: String, name: String, for error: Error) -> String {
+        switch error {
+        case WGQuickExecutorError.quickMissing:
+            return errResponse(code: "wg-quick-missing", detail: nil)
+        case WGQuickExecutorError.timedOut:
+            return errResponse(code: "wg-failed", detail: nil)
+        case WGQuickExecutorError.failed(let detail):
+            logToDaemonStderr("\(command) \(name) failed: \(detail)")
+            return errResponse(code: "wg-failed", detail: nil)
+        default:
+            logToDaemonStderr("\(command) \(name) failed: unexpected error \(error)")
+            return errResponse(code: "wg-failed", detail: nil)
+        }
+    }
+
+    private static func logToDaemonStderr(_ message: String) {
+        FileHandle.standardError.write(Data((message + "\n").utf8))
     }
 
     // MARK: - Чтение/запись с дедлайном

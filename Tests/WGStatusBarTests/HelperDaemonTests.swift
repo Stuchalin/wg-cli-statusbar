@@ -28,8 +28,22 @@ final class HelperDaemonTests: XCTestCase {
 
     // MARK: - Фикстуры
 
-    private func startServer(executor: WGShowExecuting, readDeadline: TimeInterval = 5) async throws {
-        let server = DaemonServer(executor: executor, socketPath: socketPath, readDeadline: readDeadline)
+    private func startServer(
+        executor: WGShowExecuting,
+        readDeadline: TimeInterval = 5,
+        configStore: TunnelConfigStore = TunnelConfigStore(
+            searchPaths: [],
+            fileSystem: FileManagerTunnelConfigFileSystem()
+        ),
+        tunnelExecutor: WGQuickExecuting = StubTunnelExecutor()
+    ) async throws {
+        let server = DaemonServer(
+            executor: executor,
+            socketPath: socketPath,
+            readDeadline: readDeadline,
+            configStore: configStore,
+            tunnelExecutor: tunnelExecutor
+        )
         serverTask = Task.detached { try await server.run() }
         // Файл сокета появляется на bind — раньше accept-цикла.
         let deadline = Date().addingTimeInterval(5)
@@ -84,6 +98,91 @@ final class HelperDaemonTests: XCTestCase {
                 throw thrownError
             }
             return dump
+        }
+    }
+
+    // MARK: - Фикстуры туннельных запросов
+
+    /// Псевдодиректория конфигов: один «существующий» путь с настраиваемым
+    /// листингом — стор поверх неё, как FakeConfigFileSystem в тестах стора.
+    private final class StubConfigFileSystem: TunnelConfigFileSystem {
+        static let directory = "/tmp/wgstatusbar-helperdaemontests-configs"
+        var entries: [String] = []
+
+        func contentsOfDirectory(atPath path: String) -> [String]? {
+            path == Self.directory ? entries : nil
+        }
+
+        func isDirectory(atPath path: String) -> Bool {
+            path == Self.directory
+        }
+    }
+
+    private func makeConfigStore(names: [String]) -> TunnelConfigStore {
+        let fileSystem = StubConfigFileSystem()
+        fileSystem.entries = names.map { $0 + ".conf" }
+        return TunnelConfigStore(
+            searchPaths: [StubConfigFileSystem.directory],
+            fileSystem: fileSystem
+        )
+    }
+
+    /// Вызов туннельного исполнителя для ассертов (кортежи не Equatable).
+    private struct TunnelCall: Equatable {
+        let command: String
+        let name: String
+    }
+
+    /// Заглушка исполнителя up/down: конфигурируемая ошибка/задержка +
+    /// счётчики и журнал вызовов (по образцу StubExecutor).
+    private final class StubTunnelExecutor: WGQuickExecuting {
+        private let lock = NSLock()
+        private var thrownError: Error?
+        private var delay: TimeInterval = 0
+        private var callsStorage: [TunnelCall] = []
+        private var startCounter = 0
+        private var callCounter = 0
+
+        func configure(error: Error? = nil, delay: TimeInterval = 0) {
+            lock.withLock {
+                self.thrownError = error
+                self.delay = delay
+            }
+        }
+
+        var calls: [TunnelCall] {
+            lock.withLock { callsStorage }
+        }
+
+        var startCount: Int {
+            lock.withLock { startCounter }
+        }
+
+        var callCount: Int {
+            lock.withLock { callCounter }
+        }
+
+        func runUp(name: String) async throws {
+            try await perform(command: "up", name: name)
+        }
+
+        func runDown(name: String) async throws {
+            try await perform(command: "down", name: name)
+        }
+
+        private func perform(command: String, name: String) async throws {
+            let (thrownError, delay) = lock.withLock {
+                callsStorage.append(TunnelCall(command: command, name: name))
+                startCounter += 1
+                return (self.thrownError, self.delay)
+            }
+            if delay > 0 {
+                try await Task.sleep(nanoseconds: UInt64(delay * 1_000_000_000))
+            }
+            lock.withLock { callCounter += 1 }
+            if let thrownError {
+                throw thrownError
+            }
         }
     }
 
@@ -266,19 +365,170 @@ final class HelperDaemonTests: XCTestCase {
         let executor = StubExecutor()
         try await startServer(executor: executor)
 
-        // Успешный возврат readToEOF = сервер закрыл соединение после ответа.
-        let exchange = try performExchange("bogus\n")
+        // Хвост у show/list держит команду неизвестной: безадресные команды
+        // аргументов не принимают (не «show extra» после появления list/up/down).
+        let bogusRequests = ["bogus\n", "show extra\n", "list extra\n"]
+        for request in bogusRequests {
+            // Успешный возврат readToEOF = сервер закрыл соединение после ответа.
+            let exchange = try performExchange(request)
+            let response = try XCTUnwrap(decode(response: exchange.response))
+            XCTAssertEqual(
+                response,
+                .err(
+                    protocolVersion: helperProtocolVersion,
+                    build: helperBuildNumber,
+                    code: .wgFailed,
+                    detail: "unknown command: \(request.trimmingCharacters(in: .whitespacesAndNewlines))"
+                ),
+                "для запроса \(request)"
+            )
+        }
+        XCTAssertEqual(executor.callCount, 0, "неизвестная команда не должна трогать исполнителя")
+    }
+
+    // MARK: - list → имена конфигов
+
+    func testListReturnsNamesFromStoreOnePerLine() async throws {
+        let store = makeConfigStore(names: ["kvmka-ai", "kvmka-full"])
+        try await startServer(executor: StubExecutor(), configStore: store)
+
+        let exchange = try performExchange(encode(.list))
+        let response = try XCTUnwrap(
+            decode(response: exchange.response),
+            "list должен отвечать ok-payload с именами, а не разрывом"
+        )
+        XCTAssertEqual(
+            response,
+            .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "kvmka-ai\nkvmka-full\n"),
+            "payload — имена по одному в строке, заголовок — версии из констант"
+        )
+    }
+
+    func testListWithEmptyStoreReturnsOkWithEmptyPayload() async throws {
+        // Конфигов нет (или директорий) — это не ошибка: ok с пустым payload.
+        let store = makeConfigStore(names: [])
+        try await startServer(executor: StubExecutor(), configStore: store)
+
+        let exchange = try performExchange(encode(.list))
         let response = try XCTUnwrap(decode(response: exchange.response))
         XCTAssertEqual(
             response,
-            .err(
-                protocolVersion: helperProtocolVersion,
-                build: helperBuildNumber,
-                code: .wgFailed,
-                detail: "unknown command: bogus"
-            )
+            .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "")
         )
-        XCTAssertEqual(executor.callCount, 0, "неизвестная команда не должна трогать исполнителя")
+    }
+
+    // MARK: - up/down → ok без payload
+
+    func testUpAndDownHappyPathReturnOkWithoutPayloadAndReachExecutor() async throws {
+        let store = makeConfigStore(names: ["kvmka-ai"])
+        let tunnelExecutor = StubTunnelExecutor()
+        try await startServer(executor: StubExecutor(), configStore: store, tunnelExecutor: tunnelExecutor)
+
+        for request in [encode(.up("kvmka-ai")), encode(.down("kvmka-ai"))] {
+            let exchange = try performExchange(request)
+            let response = try XCTUnwrap(
+                decode(response: exchange.response),
+                "успешная операция должна отвечать ok, а не разрывом"
+            )
+            XCTAssertEqual(
+                response,
+                .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: ""),
+                "успех up/down — ok без payload, версии в заголовке"
+            )
+        }
+        XCTAssertEqual(
+            tunnelExecutor.calls,
+            [TunnelCall(command: "up", name: "kvmka-ai"), TunnelCall(command: "down", name: "kvmka-ai")],
+            "команда и имя должны дойти до исполнителя в исходном виде"
+        )
+    }
+
+    func testUpDownWithInvalidNameReturnsTunnelNotFoundAndSkipsExecutor() async throws {
+        // Хорошей формы имя без конфига, путь-инъекция, пробел, пустое имя,
+        // отсутствующий аргумент — всё не проходит валидацию стора.
+        let bogusRequests = [
+            "up nosuch\n",
+            "down nosuch\n",
+            "up ../etc/passwd\n",
+            "up etc/wireguard/work\n",
+            "up bad name\n",
+            "up шфта\n",
+            "up\n",
+            "down\n",
+        ]
+        let store = makeConfigStore(names: ["kvmka-ai"])
+        let tunnelExecutor = StubTunnelExecutor()
+        try await startServer(executor: StubExecutor(), configStore: store, tunnelExecutor: tunnelExecutor)
+
+        for request in bogusRequests {
+            let exchange = try performExchange(request)
+            let response = try XCTUnwrap(
+                decode(response: exchange.response),
+                "невалидное имя должно давать err-ответ, а не разрыв: \(request)"
+            )
+            XCTAssertEqual(
+                response,
+                .err(protocolVersion: helperProtocolVersion, build: helperBuildNumber, code: .tunnelNotFound, detail: nil),
+                "для запроса \(request)"
+            )
+        }
+        XCTAssertTrue(tunnelExecutor.calls.isEmpty, "невалидное имя не должно доходить до wg-quick")
+    }
+
+    // MARK: - ошибки исполнителя up/down → err только с кодом
+
+    func testTunnelExecutorErrorMapsToErrCodeWithoutDetail() async throws {
+        let cases: [(thrown: Error, expectedCode: HelperResponseCode)] = [
+            (WGQuickExecutorError.quickMissing, .quickMissing),
+            (WGQuickExecutorError.timedOut, .wgFailed),
+            (WGQuickExecutorError.failed("wg-quick echo: PrivateKey = SECRETPSK\nwg: invalid config"), .wgFailed),
+            // Default-ветка: чужая ошибка (не WGQuickExecutorError) — лог в
+            // stderr демона + err wg-failed без детали, как и типизированные.
+            (NSError(domain: "HelperDaemonTests", code: 42), .wgFailed),
+        ]
+        let store = makeConfigStore(names: ["kvmka-ai"])
+        let tunnelExecutor = StubTunnelExecutor()
+        try await startServer(executor: StubExecutor(), configStore: store, tunnelExecutor: tunnelExecutor)
+
+        for testCase in cases {
+            tunnelExecutor.configure(error: testCase.thrown)
+            let exchange = try performExchange(encode(.up("kvmka-ai")))
+            let response = try XCTUnwrap(
+                decode(response: exchange.response),
+                "ошибка исполнителя должна давать err-ответ, а не разрыв: \(testCase.thrown)"
+            )
+            XCTAssertEqual(
+                response,
+                .err(
+                    protocolVersion: helperProtocolVersion,
+                    build: helperBuildNumber,
+                    code: testCase.expectedCode,
+                    detail: nil
+                ),
+                "для брошенной ошибки \(testCase.thrown) — err без детали"
+            )
+            // Fail-closed, как DumpSanitizer: stderr-хвост wg-quick (эхо
+            // команд, цитаты строк конфига) не покидает демон даже по err.
+            XCTAssertFalse(
+                exchange.response.contains("SECRETPSK"),
+                "деталь stderr wg-quick не должна попадать на wire"
+            )
+        }
+    }
+
+    func testClientDisconnectDuringTunnelOperationDoesNotCancelIt() async throws {
+        // EOF клиента не отменяет up/down (в отличие от show): SIGTERM посреди
+        // up оставил бы полуприменённый туннель — операция обязана дойти до
+        // конца, ограничивает её только op-таймаут исполнителя.
+        let store = makeConfigStore(names: ["kvmka-ai"])
+        let tunnelExecutor = StubTunnelExecutor()
+        tunnelExecutor.configure(delay: 0.3)
+        try await startServer(executor: StubExecutor(), configStore: store, tunnelExecutor: tunnelExecutor)
+
+        try connectSendAndClose(encode(.up("kvmka-ai")))
+        try await waitFor { tunnelExecutor.callCount == 1 }
+
+        XCTAssertEqual(tunnelExecutor.calls, [TunnelCall(command: "up", name: "kvmka-ai")])
     }
 
     // MARK: - устойчивость accept-цикла
