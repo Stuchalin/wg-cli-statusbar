@@ -970,6 +970,109 @@ final class WGStatusBarTests: XCTestCase {
         )
     }
 
+    /// Окно между успешной операцией и ответом `state`: успех снимает имя
+    /// с inFlight синхронно, а перезалив состояния приедет позже (в
+    /// последовательной очереди демона — за show немедленного refresh).
+    /// Регресс: раньше в этом окне строка держала старую точку, и повторный
+    /// клик читал старое направление — ту же выполненную команду (up по
+    /// поднятому → «already exists», ложная ошибка операции). Теперь `ok`
+    /// демона переворачивает точку оптимистично; здесь второй state
+    /// провален (строки держат последнее известное — то самое окно).
+    func testToggleSuccessFlipsRowBeforeStateReplyArrives() {
+        let client = MockTunnelClient()
+        client.configure(
+            stateResults: [
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),
+                .failure(StatusFailure.badResponse),
+            ],
+            opResults: [.success(())]
+        )
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump("")),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "state должен заполнить tunnels"
+        )
+
+        model.toggleTunnel(named: "kvmka-ai")
+        waitUntil(
+            { model.inFlightTunnels.isEmpty && client.stateCalls == 2 },
+            "успешный up обязан завершиться и перезапросить состояние"
+        )
+
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "точка строки — уже поднята: ok демона, а не только ответ state"
+        )
+
+        model.toggleTunnel(named: "kvmka-ai")  // повторный клик в окне до нового state
+        waitUntil({ !client.downCalls.isEmpty }, "повторный клик обязан слать инверсную команду")
+        XCTAssertEqual(
+            client.upCalls,
+            ["kvmka-ai"],
+            "второго up быть не должно — окно больше не отправляет ту же команду"
+        )
+        waitUntil({ model.inFlightTunnels.isEmpty }, "вторая операция должна завершиться")
+    }
+
+    /// Догнавший опоздавший ДО-операционный state не отменяет оптимистичную
+    /// точку: последовательный демон упорядочивает отправку ответов, но
+    /// применение их моделью идёт через GCD-поток → continuation → MainActor
+    /// и может задержаться. Второй state (отправлен до up) висит на клапане,
+    /// пока операция завершается, флипает строку и запрашивает третий state;
+    /// затем второй отпускается — без latest-wins (`loadTunnelsGeneration`)
+    /// его до-операционное «down» перетёрло бы «up» после ответа операции.
+    func testDelayedPreOpStateReplyDoesNotCancelOptimisticFlip() {
+        let client = MockTunnelClient()
+        client.configure(
+            stateResults: [
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),  // 1-й: заполнение
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),  // 2-й: до-операционный, зависает
+                .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),  // 3-й: после up
+            ],
+            opResults: [.success(())],
+            gateStateCall: 2
+        )
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump("")),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "первый state должен заполнить tunnels"
+        )
+
+        model.loadTunnels()  // второй state — повиснет на клапане
+        waitUntil({ client.stateCalls == 2 }, "до-операционный state должен стартовать")
+
+        model.toggleTunnel(named: "kvmka-ai")  // направление down → up
+        waitUntil(
+            { model.inFlightTunnels.isEmpty && client.stateCalls == 3 },
+            "успех обязан поставить flip и перезапросить состояние"
+        )
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "точка строки — поднята: ok демона плюс после-операционный state"
+        )
+
+        client.releaseStateGate()  // опоздавший до-операционный ответ догоняет модель
+        spinRunLoop()
+
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "опоздавший ответ старого запроса отбрасывается (latest-wins)"
+        )
+    }
+
     /// In-flight операция глушит show-тик: refresh не запускается вовсе — без
     /// ошибки, без смены serviceState, show демона не дёргается; снапшот не
     /// устаревает, даже когда операция пережила stalenessLimit.
@@ -1436,6 +1539,11 @@ private final class MockTunnelClient: TunnelCommandRunning {
     private var opResults: [Result<Void, Error>] = []
     private var gated = false
     private var gateContinuation: CheckedContinuation<Void, Never>?
+    /// Порядковый номер (с 1) state-вызова, который должен повиснуть до
+    /// `releaseStateGate()` — управляемо задержанный ответ одного запроса
+    /// (гонка «опоздавший до-операционный state против optimistic flip»).
+    private var stateGateCallNumber: Int?
+    private var stateGateContinuation: CheckedContinuation<Void, Never>?
     private var stateCallsStorage = 0
     private var upCallsStorage: [String] = []
     private var downCallsStorage: [String] = []
@@ -1443,12 +1551,14 @@ private final class MockTunnelClient: TunnelCommandRunning {
     func configure(
         stateResults: [Result<[TunnelState], Error>] = [],
         opResults: [Result<Void, Error>] = [],
-        gate: Bool = false
+        gate: Bool = false,
+        gateStateCall: Int? = nil
     ) {
         lock.withLock {
             self.stateResults = stateResults
             self.opResults = opResults
             self.gated = gate
+            self.stateGateCallNumber = gateStateCall
         }
     }
 
@@ -1464,12 +1574,23 @@ private final class MockTunnelClient: TunnelCommandRunning {
         }
     }
 
-    func state() async throws -> [TunnelState] {
-        let result: Result<[TunnelState], Error> = lock.withLock {
-            stateCallsStorage += 1
-            return stateResults.isEmpty ? .success([]) : stateResults.removeFirst()
+    /// Отпускает зависший на клапане state-вызов.
+    func releaseStateGate() {
+        lock.withLock {
+            stateGateContinuation?.resume()
+            stateGateContinuation = nil
+            stateGateCallNumber = nil
         }
-        switch result {
+    }
+
+    func state() async throws -> [TunnelState] {
+        let call: (number: Int, result: Result<[TunnelState], Error>) = lock.withLock {
+            stateCallsStorage += 1
+            let result = stateResults.isEmpty ? .success([]) : stateResults.removeFirst()
+            return (stateCallsStorage, result)
+        }
+        await waitOnStateGate(callNumber: call.number)
+        switch call.result {
         case .success(let states):
             return states
         case .failure(let error):
@@ -1508,6 +1629,23 @@ private final class MockTunnelClient: TunnelCommandRunning {
             let resumeNow = lock.withLock {
                 if gated, gateContinuation == nil {
                     gateContinuation = continuation
+                    return false
+                }
+                return true
+            }
+            if resumeNow {
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Клапан для ровно одного state-вызова с заданным номером (остальные
+    /// проходят): задержка ответа одного запроса без остановки прочих.
+    private func waitOnStateGate(callNumber: Int) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeNow = lock.withLock {
+                if callNumber == stateGateCallNumber, stateGateContinuation == nil {
+                    stateGateContinuation = continuation
                     return false
                 }
                 return true

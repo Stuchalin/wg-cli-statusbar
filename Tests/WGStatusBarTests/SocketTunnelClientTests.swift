@@ -402,6 +402,8 @@ final class SocketTunnelClientTests: XCTestCase {
             "kvmka-ai\tsideways\tutun2\n",  // чужое слово состояния
             "\tup\tutun2\n",  // пустое имя
             "kvmka-ai\tup\tutun2\ngarbage\n",  // мусор после валидной строки
+            "\n",  // один только терминатор — мусор, а не «конфигов нет»
+            "kvmka-ai\tup\tutun2\n\nkvmka-ai\tdown\t\n",  // пустая строка между записями
         ]
         for payload in payloads {
             let socketPath = makeSocketPath()

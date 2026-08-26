@@ -45,14 +45,22 @@ public struct SocketTunnelClient {
     /// Состояние туннелей из конфигов демона: строки payload всегда из трёх
     /// полей через `\t` — `имя\tup\tutunN` у поднятого (utun непустой),
     /// `имя\tdown\t` у опущенного (пустой); пустой payload — конфигов нет.
-    /// Разбор строки с `omittingEmptySubsequences: false`: дефолтный split
-    /// съедает пустое третье поле down-строк, и полей оставалось бы два.
-    /// Любая строка мимо формата (не 3 поля, пустое имя, чужое слово
-    /// состояния, up без utun или down с utun) — мусор формата →
-    /// `.badResponse`, как битый заголовок у остальных команд.
+    /// Разбор по строкам с `omittingEmptySubsequences: false` (дефолтный
+    /// split съедает и пустое третье поле down-строк, и пустые строки между
+    /// записями); хвостовой `\n` — терминатор последней строки, а не строка:
+    /// непустой payload по правилам decode завершён им всегда, поэтому
+    /// ровно один пустой хвостовой элемент снимается до разбора. Любая
+    /// строка мимо формата (не 3 поля, пустое имя, пустая строка, чужое
+    /// слово состояния, up без utun или down с utun) — мусор формата →
+    /// `.badResponse`, как битый заголовок у остальных команд; payload из
+    /// одного `\n` — тоже мусор, а не «конфигов нет».
     public func state() async throws -> [TunnelState] {
         let payload = try await exchange(.state)
-        return try payload.split(separator: "\n").map { line in
+        var lines = payload.split(separator: "\n", omittingEmptySubsequences: false)
+        if lines.last?.isEmpty == true {
+            lines.removeLast()
+        }
+        return try lines.map { line in
             let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
             guard fields.count == 3, !fields[0].isEmpty else {
                 throw StatusFailure.badResponse

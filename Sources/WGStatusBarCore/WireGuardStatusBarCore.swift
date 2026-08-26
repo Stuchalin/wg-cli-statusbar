@@ -209,6 +209,18 @@ public final class WireGuardStatusModel: ObservableObject {
     private var lastSuccessAt: Date?
     /// Номер текущего refresh; завершения старых поколений отбрасываются.
     private var refreshGeneration = 0
+    /// Номер текущего запроса `state`; применяются только ответы последнего
+    /// (latest-wins, как `refreshGeneration` у тика). Последовательный демон
+    /// упорядочивает отправку ответов, но не их применение моделью: обмен
+    /// каждого запроса идёт через свой GCD-поток → continuation → MainActor,
+    /// и опоздавший ответ старого запроса не должен перетирать ни свежее
+    /// состояние, ни оптимистичную точку после up/down. Последнее закрыто
+    /// синхронностью самого flip'а: завершение операции (успех и провал)
+    /// поднимает поколение тем же MainActor-блоком, что его ставит
+    /// (`loadTunnels()` сразу за `applyOpOutcome`), поэтому до-операционный
+    /// ответ применяется либо до flip'а, либо в чужом поколении — третьего
+    /// interleaving нет.
+    private var loadTunnelsGeneration = 0
 
     public convenience init() {
         self.init(
@@ -489,15 +501,21 @@ public final class WireGuardStatusModel: ObservableObject {
     /// переворачивают: состояние — данные демона, снапшот здесь не при делах).
     /// Ошибки глотаются молча: данные меню оппортунистические, не источник
     /// статуса (иначе dev-фолбэк без демона получал бы ложную ошибку на
-    /// карточке); строки и имена держат последнее известное. До `.installed`
-    /// демон не дёргается вовсе: у старого build `state` — unknown command.
+    /// карточке); строки и имена держат последнее известное. Ответ применяется
+    /// latest-wins (`loadTunnelsGeneration`): маппинг, переименование карточки
+    /// и `tunnels` — один снимок одного ответа, опоздавший ответ старого
+    /// запроса отбрасывается целиком. До `.installed` демон не дёргается
+    /// вовсе: у старого build `state` — unknown command.
     public func loadTunnels() {
         guard serviceState == .installed else { return }
+        loadTunnelsGeneration += 1
+        let generation = loadTunnelsGeneration
         let client = tunnelCommandRunner
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
                 let states = try await client.state()
+                guard generation == self.loadTunnelsGeneration else { return }
                 let mapping = Dictionary(
                     states.compactMap { state in state.utun.map { ($0, state.name) } },
                     uniquingKeysWith: { first, _ in first }
@@ -525,7 +543,13 @@ public final class WireGuardStatusModel: ObservableObject {
     /// Клик по строке туннеля: направление — из `tunnels` (последний ответ
     /// `state`; строки без ответа честно читаются «down»), операция — через
     /// демон. Пока имя в `inFlightTunnels`, show-тик подавлен и снапшот не
-    /// устаревает. Успех → немедленный `refresh()` + `loadTunnels()`;
+    /// устаревает. Успех → оптимистичная точка строки (`ok` демона доказал
+    /// новое состояние; ответ `state` приедет позже — в последовательной
+    /// очереди демона он стоит за show немедленного refresh — и сойдётся к
+    /// истине; опоздавший ДО-операционный state отменить её не может —
+    /// завершение операции поднимает поколение `loadTunnelsGeneration` тем
+    /// же MainActor-блоком, что ставит flip) + немедленный `refresh()` +
+    /// `loadTunnels()`;
     /// провал → one-tick `lastFailure` + `loadTunnels()` БЕЗ refresh — пролог
     /// `refresh()` стирает `lastFailure` синхронно, ошибка не отрисовалась бы
     /// вовсе; данные сойдёт следующий 5-с тик (прецедент: провал установки
@@ -548,6 +572,7 @@ public final class WireGuardStatusModel: ObservableObject {
                     try await client.up(name)
                 }
                 self.inFlightTunnels.remove(name)
+                self.applyOpOutcome(name: name, isUp: !shouldTearDown)
                 self.refresh()
                 self.loadTunnels()
             } catch {
@@ -556,6 +581,19 @@ public final class WireGuardStatusModel: ObservableObject {
                 self.loadTunnels()
             }
         }
+    }
+
+    /// Оптимистичная точка строки сразу после успешного up/down: имя снято
+    /// с `inFlightTunnels` синхронно, а ответ `state` приедет позже — без
+    /// переворота строка держала бы старую точку, и повторный клик в этом
+    /// окне читал бы старое направление и слал ту же выполненную команду
+    /// (up по поднятому → «already exists» → ложная ошибка операции).
+    /// `ok` демона состояние уже доказал; следующий ответ `state` сойдётся
+    /// к истине и перезальёт точку. Без изменения — без republish.
+    private func applyOpOutcome(name: String, isUp: Bool) {
+        guard let index = tunnels.firstIndex(where: { $0.name == name }) else { return }
+        guard tunnels[index].isUp != isUp else { return }
+        tunnels[index] = TunnelInfo(name: name, isUp: isUp)
     }
 
     private func startTimer() {
