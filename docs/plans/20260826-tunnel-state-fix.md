@@ -87,9 +87,9 @@
 - [x] код-ревью диффа ветки (корректность, совместимость старого приложения с демоном 17)
 
 ### Task 7: [Final] Update documentation
-- [ ] CLAUDE.md: запрос `state` в протоколе (формат трёхполевых строк), `WireGuardRuntimeReader` в архитектуре (namer поверх ридера; демон — источник состояния и имён в daemon-режиме), data flow (`loadTunnels` через state, приоритет displayName, namer — фолбэк), секция тестов — новые файлы
-- [ ] README: буллет управления туннелями (состояние и имена определяет демон); абзац про имена в «How it reads status» (README.md:39 — «Tunnel names come from the wg-quick mechanism» больше не вся правда); переработка пункта Display names в Manual test checklist (README.md:148 говорит «serving the mapping from the daemon is a future task» — теперь это сделано); сценарий фикса в чеклист: поднятый туннель ●, клик = down в логе демона, имя конфига в карточке
-- [ ] план: все чекбоксы закрыты
+- [x] CLAUDE.md: запрос `state` в протоколе (формат трёхполевых строк), `WireGuardRuntimeReader` в архитектуре (namer поверх ридера; демон — источник состояния и имён в daemon-режиме), data flow (`loadTunnels` через state, приоритет displayName, namer — фолбэк), секция тестов — новые файлы
+- [x] README: буллет управления туннелями (состояние и имена определяет демон); абзац про имена в «How it reads status» (README.md:39 — «Tunnel names come from the wg-quick mechanism» больше не вся правда); переработка пункта Display names в Manual test checklist (README.md:148 говорит «serving the mapping from the daemon is a future task» — теперь это сделано); сценарий фикса в чеклист: поднятый туннель ●, клик = down в логе демона, имя конфига в карточке
+- [x] план: все чекбоксы закрыты
 
 ## Technical Details
 
