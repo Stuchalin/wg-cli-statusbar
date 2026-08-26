@@ -74,7 +74,9 @@ public enum DaemonServerError: Error, CustomStringConvertible {
 /// исполнителя → санитизация (единственная точка, где секступаются секреты) →
 /// `ok <protocol> <build>` + дамп; ошибка исполнителя → `err` с кодом.
 /// `list` → имена конфигов wg-quick из `TunnelConfigStore` (`ok` + имена по
-/// одному в строке); `up`/`down` → валидация имени тем же стором →
+/// одному в строке); `state` → те же имена × валидированные пары ридера
+/// `/var/run/wireguard` (`ok` + строки `имя\tup\tutun` / `имя\tdown\t`,
+/// локальный скан без процессов); `up`/`down` → валидация имени тем же стором →
 /// `WGQuickExecutor` (`ok` без payload). Ошибки туннельных операций — `err`
 /// только с кодом: деталь (stderr-хвост wg-quick) пишется в stderr демона,
 /// на wire не попадает. Туннельные операции не отменяются по EOF клиента
@@ -92,6 +94,9 @@ public final class DaemonServer {
     private let configStore: TunnelConfigStore
     /// Исполнитель туннельных операций up/down.
     private let tunnelExecutor: WGQuickExecuting
+    /// Ридер живого состояния `/var/run/wireguard` для запроса `state`
+    /// (без собственного кэша — скан на каждый запрос).
+    private let runtimeReader: WireGuardRuntimeReader
     private let cancelFlag = CancelFlag()
 
     /// Максимальная длина строки команды: запросы крошечные, мусор без `\n`
@@ -103,18 +108,22 @@ public final class DaemonServer {
     ///   - configStore: стор конфигов wg-quick — имена для `list` и валидация
     ///     имени до запуска `wg-quick` (стаб-FS в тестах).
     ///   - tunnelExecutor: исполнитель `up`/`down` (стаб в тестах).
+    ///   - runtimeReader: ридер пар `.name`/`.sock` для `state` (фейковый FS
+    ///     в тестах).
     public init(
         executor: WGShowExecuting,
         socketPath: String,
         readDeadline: TimeInterval = 5,
         configStore: TunnelConfigStore = TunnelConfigStore(),
-        tunnelExecutor: WGQuickExecuting = WGQuickExecutor()
+        tunnelExecutor: WGQuickExecuting = WGQuickExecutor(),
+        runtimeReader: WireGuardRuntimeReader = WireGuardRuntimeReader()
     ) {
         self.executor = executor
         self.socketPath = socketPath
         self.readDeadline = readDeadline
         self.configStore = configStore
         self.tunnelExecutor = tunnelExecutor
+        self.runtimeReader = runtimeReader
     }
 
     public func run() async throws {
@@ -250,8 +259,8 @@ public final class DaemonServer {
 
         // Первое слово — команда, остаток строки — её аргумент (у up/down —
         // имя туннеля, с пробелами внутри — целиком: валидация их отсечёт).
-        // `show`/`list` аргументов не имеют — строка с хвостом остаётся
-        // неизвестной командой, как и до появления разбора.
+        // `show`/`list`/`state` аргументов не имеют — строка с хвостом
+        // остаётся неизвестной командой, как и до появления разбора.
         let parts = command
             .split(separator: " ", maxSplits: 1, omittingEmptySubsequences: false)
             .map(String.init)
@@ -263,6 +272,8 @@ public final class DaemonServer {
             await serveShow(to: clientFD)
         case "list" where argument == nil:
             await serveList(to: clientFD)
+        case "state" where argument == nil:
+            await serveState(to: clientFD)
         case "up", "down":
             // Отсутствующий аргумент — пустое имя: валидация его не пропустит.
             await serveTunnel(command: head, name: argument ?? "", to: clientFD)
@@ -281,6 +292,31 @@ public final class DaemonServer {
         // уже отфильтрованы regex wg-quick и отсортированы стором.
         let payload = configStore.names()
             .map { $0 + "\n" }
+            .joined()
+        _ = await Self.writeResponse(
+            fd: clientFD,
+            text: Self.okResponse(dump: payload),
+            deadline: readDeadline
+        )
+    }
+
+    /// `state`: состояние каждого конфига стора — строки
+    /// `имя\tup\tutunN` / `имя\tdown\t` (у down третье поле пустое, полей
+    /// всегда три). Конфиг «поднят» ⟺ у ридера есть валидная пара для его
+    /// имени — тот же корень, что у namer'а приложения (демон — root,
+    /// `/var/run/wireguard` с правами root читаем только ему). Локальный скан
+    /// без процессов — укладывается в любой дедлайн цикла; скан выполняется
+    /// заново на каждый запрос (кэша в ридере нет — кэш остаётся только в
+    /// namer'е, закэшированный ответ тихо повторил бы исходный баг).
+    private func serveState(to clientFD: Int32) async {
+        let upInterfaces = Dictionary(
+            runtimeReader.readPairs().map { ($0.configName, $0.interfaceName) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let payload = configStore.names()
+            .map { name in
+                upInterfaces[name].map { "\(name)\tup\t\($0)\n" } ?? "\(name)\tdown\t\n"
+            }
             .joined()
         _ = await Self.writeResponse(
             fd: clientFD,

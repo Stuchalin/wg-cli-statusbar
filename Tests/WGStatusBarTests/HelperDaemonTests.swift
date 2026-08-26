@@ -35,14 +35,16 @@ final class HelperDaemonTests: XCTestCase {
             searchPaths: [],
             fileSystem: FileManagerTunnelConfigFileSystem()
         ),
-        tunnelExecutor: WGQuickExecuting = StubTunnelExecutor()
+        tunnelExecutor: WGQuickExecuting = StubTunnelExecutor(),
+        runtimeReader: WireGuardRuntimeReader = WireGuardRuntimeReader()
     ) async throws {
         let server = DaemonServer(
             executor: executor,
             socketPath: socketPath,
             readDeadline: readDeadline,
             configStore: configStore,
-            tunnelExecutor: tunnelExecutor
+            tunnelExecutor: tunnelExecutor,
+            runtimeReader: runtimeReader
         )
         serverTask = Task.detached { try await server.run() }
         // Файл сокета появляется на bind — раньше accept-цикла.
@@ -125,6 +127,55 @@ final class HelperDaemonTests: XCTestCase {
             searchPaths: [StubConfigFileSystem.directory],
             fileSystem: fileSystem
         )
+    }
+
+    /// Псевдокаталог `/var/run/wireguard` для запроса `state`: мутабельная
+    /// карта «имя файла → содержимое + mtime» поверх протокола ридера — пары
+    /// добавляются и убираются между запросами; у пары один штамп времени,
+    /// поэтому |Δmtime| = 0 < 2 c (правило свежести проходит).
+    private final class StubRuntimeFileSystem: WireGuardTunnelNameFileSystem {
+        private let lock = NSLock()
+        private var files: [String: (contents: String, modificationDate: Date)] = [:]
+
+        func addPair(config: String, interface: String) {
+            let stamp = Date()
+            lock.withLock {
+                files[config + ".name"] = (interface, stamp)
+                files[interface + ".sock"] = ("", stamp)
+            }
+        }
+
+        /// Убирает только `.name`: пара распадается, сокет-сосед остаётся —
+        /// как зависшая после сноса туннеля запись.
+        func removeNameFile(config: String) {
+            lock.withLock {
+                files.removeValue(forKey: config + ".name")
+            }
+        }
+
+        private func file(at path: String) -> (contents: String, modificationDate: Date)? {
+            lock.withLock { files[(path as NSString).lastPathComponent] }
+        }
+
+        func entries(inDirectory path: String) -> [String] {
+            lock.withLock { Array(files.keys) }
+        }
+
+        func contents(ofFile path: String) -> String? {
+            file(at: path)?.contents
+        }
+
+        func fileExists(atPath path: String) -> Bool {
+            file(at: path) != nil
+        }
+
+        func modificationDate(ofFile path: String) -> Date? {
+            file(at: path)?.modificationDate
+        }
+    }
+
+    private func makeRuntimeReader(_ fileSystem: WireGuardTunnelNameFileSystem) -> WireGuardRuntimeReader {
+        WireGuardRuntimeReader(fileSystem: fileSystem)
     }
 
     /// Вызов туннельного исполнителя для ассертов (кортежи не Equatable).
@@ -365,9 +416,10 @@ final class HelperDaemonTests: XCTestCase {
         let executor = StubExecutor()
         try await startServer(executor: executor)
 
-        // Хвост у show/list держит команду неизвестной: безадресные команды
-        // аргументов не принимают (не «show extra» после появления list/up/down).
-        let bogusRequests = ["bogus\n", "show extra\n", "list extra\n"]
+        // Хвост у show/list/state держит команду неизвестной: безадресные
+        // команды аргументов не принимают (не «show extra» после появления
+        // list/up/down/state).
+        let bogusRequests = ["bogus\n", "show extra\n", "list extra\n", "state extra\n"]
         for request in bogusRequests {
             // Успешный возврат readToEOF = сервер закрыл соединение после ответа.
             let exchange = try performExchange(request)
@@ -415,6 +467,117 @@ final class HelperDaemonTests: XCTestCase {
             response,
             .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "")
         )
+    }
+
+    // MARK: - state → строки состояния туннелей
+
+    func testStateReturnsUpForValidatedPairsAndDownForOthers() async throws {
+        // kvmka-full без пары (туннель опущен или запись зависла) — down с
+        // пустым третьим полем: полей всегда три, включая пустой utun.
+        let store = makeConfigStore(names: ["kvmka-ai", "kvmka-full", "home"])
+        let runtime = StubRuntimeFileSystem()
+        runtime.addPair(config: "kvmka-ai", interface: "utun2")
+        runtime.addPair(config: "home", interface: "utun7")
+        try await startServer(
+            executor: StubExecutor(),
+            configStore: store,
+            runtimeReader: makeRuntimeReader(runtime)
+        )
+
+        let exchange = try performExchange(encode(.state))
+        let response = try XCTUnwrap(
+            decode(response: exchange.response),
+            "state должен отвечать ok-payload со строками состояния, а не разрывом"
+        )
+        XCTAssertEqual(
+            response,
+            .ok(
+                protocolVersion: helperProtocolVersion,
+                build: helperBuildNumber,
+                dump: "home\tup\tutun7\nkvmka-ai\tup\tutun2\nkvmka-full\tdown\t\n"
+            ),
+            "payload — по строке на конфиг стора (в его порядке): up с utun, down с пустым третьим полем"
+        )
+    }
+
+    func testStateWithEmptyRuntimeDirectoryReturnsAllDown() async throws {
+        // Пустой `/var/run/wireguard` (ни один туннель не поднимался) — не
+        // ошибка: каждый конфиг стора отвечает down.
+        let store = makeConfigStore(names: ["kvmka-ai", "kvmka-full"])
+        try await startServer(
+            executor: StubExecutor(),
+            configStore: store,
+            runtimeReader: makeRuntimeReader(StubRuntimeFileSystem())
+        )
+
+        let exchange = try performExchange(encode(.state))
+        let response = try XCTUnwrap(decode(response: exchange.response))
+        XCTAssertEqual(
+            response,
+            .ok(
+                protocolVersion: helperProtocolVersion,
+                build: helperBuildNumber,
+                dump: "kvmka-ai\tdown\t\nkvmka-full\tdown\t\n"
+            ),
+            "нет ни одной пары ридера — все конфиги down с пустым utun-полем"
+        )
+    }
+
+    func testStateRescansRuntimeDirectoryOnEveryRequest() async throws {
+        // Свежий скан на каждый запрос — контракт и ридера, и сервера: пара,
+        // убранная между двумя state, обязана превратить второй ответ в down
+        // (закэшированный up тихо повторил бы исходный баг «already exists»).
+        let store = makeConfigStore(names: ["kvmka-ai"])
+        let runtime = StubRuntimeFileSystem()
+        runtime.addPair(config: "kvmka-ai", interface: "utun2")
+        try await startServer(
+            executor: StubExecutor(),
+            configStore: store,
+            runtimeReader: makeRuntimeReader(runtime)
+        )
+
+        let first = try XCTUnwrap(
+            decode(response: performExchange(encode(.state)).response)
+        )
+        XCTAssertEqual(
+            first,
+            .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "kvmka-ai\tup\tutun2\n")
+        )
+
+        runtime.removeNameFile(config: "kvmka-ai")
+
+        let second = try XCTUnwrap(
+            decode(response: performExchange(encode(.state)).response)
+        )
+        XCTAssertEqual(
+            second,
+            .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "kvmka-ai\tdown\t\n"),
+            "удалённая между запросами пара — второй state отвечает down"
+        )
+    }
+
+    func testStateDoesNotDisturbShowAndListRouting() async throws {
+        // state не сдвигает соседние маршруты: show/list на том же сервере,
+        // поднятом с ридером, отвечают как раньше.
+        let store = makeConfigStore(names: ["kvmka-ai"])
+        let runtime = StubRuntimeFileSystem()
+        runtime.addPair(config: "kvmka-ai", interface: "utun2")
+        let executor = StubExecutor()
+        executor.configure(dump: "dump\n")
+        try await startServer(
+            executor: executor,
+            configStore: store,
+            runtimeReader: makeRuntimeReader(runtime)
+        )
+
+        let state = try XCTUnwrap(decode(response: performExchange(encode(.state)).response))
+        XCTAssertEqual(state, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "kvmka-ai\tup\tutun2\n"))
+
+        let show = try XCTUnwrap(decode(response: performExchange(encode(.show)).response))
+        XCTAssertEqual(show, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "dump\n"))
+
+        let list = try XCTUnwrap(decode(response: performExchange(encode(.list)).response))
+        XCTAssertEqual(list, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "kvmka-ai\n"))
     }
 
     // MARK: - up/down → ok без payload

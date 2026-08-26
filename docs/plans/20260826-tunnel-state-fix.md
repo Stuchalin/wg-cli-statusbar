@@ -56,10 +56,10 @@
 - [x] полный сьют зелёный
 
 ### Task 3: Демон — маршрутизация `state`
-- [ ] `handleClient`: `case "state" where argument == nil` → из `configStore.names()` × пар ридера: строки `name\tup\tutunN` / `name\tdown\t` (у опущенных utun-поле пустое; всегда 3 поля); конфиг «поднят» ⟺ валидная пара ридера есть; `show`/`list`/`up`/`down` не меняются
-- [ ] `DaemonServer.init` += инжект ридера (с продакшн-дефолтом); state — локальный скан без процессов, в существующие дедлайны укладывается; **скан выполняется заново на каждый запрос** (кэша в ридере нет — кэш остаётся только в namer'е; закэшированный ридер тихо повторил бы исходный баг)
-- [ ] тесты `HelperDaemonTests`: `state` happy path (смешанные up/down, пустой utun у down); пустой `/var/run/wireguard` → все down; конфиг без пары → down; **два state-запроса подряд: между ними из фейкового FS удаляется пара → второй отвечает down**; `list`/`show` не сломаны; state с аргументом → unknown-command err (как у show/list)
-- [ ] полный сьют зелёный
+- [x] `handleClient`: `case "state" where argument == nil` → из `configStore.names()` × пар ридера: строки `name\tup\tutunN` / `name\tdown\t` (у опущенных utun-поле пустое; всегда 3 поля); конфиг «поднят» ⟺ валидная пара ридера есть; `show`/`list`/`up`/`down` не меняются
+- [x] `DaemonServer.init` += инжект ридера (с продакшн-дефолтом); state — локальный скан без процессов, в существующие дедлайны укладывается; **скан выполняется заново на каждый запрос** (кэша в ридере нет — кэш остаётся только в namer'е; закэшированный ридер тихо повторил бы исходный баг)
+- [x] тесты `HelperDaemonTests`: `state` happy path (смешанные up/down, пустой utun у down); пустой `/var/run/wireguard` → все down; конфиг без пары → down; **два state-запроса подряд: между ними из фейкового FS удаляется пара → второй отвечает down**; `list`/`show` не сломаны; state с аргументом → unknown-command err (как у show/list)
+- [x] полный сьют зелёный
 
 ### Task 4: Клиент — `TunnelState` и `state()`
 - [ ] `TunnelState { name: String, isUp: Bool, utun: String? }` (Model.swift, рядом с `TunnelInfo`)
