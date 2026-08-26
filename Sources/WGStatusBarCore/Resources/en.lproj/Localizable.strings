@@ -2,13 +2,15 @@
 "status.stale_data" = "Data is stale";
 "button.refresh" = "Refresh";
 "button.open_configs" = "Open WireGuard configs";
-"button.tunnel_management_soon" = "Tunnel management (coming soon)";
 "button.install_service" = "Install service";
 "button.update_service" = "Update service";
 "button.remove_service" = "Remove service";
 "button.quit" = "Quit";
 "menu.title.on" = "wg: on";
 "menu.title.off" = "wg: off";
+"menu.tunnels_section" = "Tunnels";
+"tunnel.accessibility.on" = "Tunnel %@ is on";
+"tunnel.accessibility.off" = "Tunnel %@ is off";
 "error.config_folder_not_found" = "WireGuard config folder was not found";
 "error.wg_show_failed" = "Command `wg show all dump` finished with code %@";
 "error.wg_show_timeout" = "Command `wg show all dump` timed out";

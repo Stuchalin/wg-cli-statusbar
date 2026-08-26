@@ -167,17 +167,11 @@ final class StatusItemControllerTests: XCTestCase {
 
         assertAction(actionEntry(.refresh, in: entries), id: .refresh, title: "button.refresh", shortcut: "r", enabled: true)
         assertAction(actionEntry(.openConfigs, in: entries), id: .openConfigs, title: "button.open_configs", shortcut: "o", enabled: true)
-        assertAction(
-            actionEntry(.manageTunnels, in: entries),
-            id: .manageTunnels,
-            title: "button.tunnel_management_soon",
-            shortcut: "",
-            modifiers: [],
-            enabled: false,
-            line: #line
-        )
         assertAction(actionEntry(.quit, in: entries), id: .quit, title: "button.quit", shortcut: "q", enabled: true)
 
+        // Дефолт: демона нет, список пуст — секции Tunnels нет, между
+        // Конфигами и сервисом один разделитель.
+        XCTAssertEqual(entries.count, 7, "карточка, разделитель, Обновить, Конфиги, разделитель, сервис, Выход")
         guard case .separator = entries[entries.count - 3] else { return XCTFail("перед пунктом сервиса — разделитель") }
         guard case .action(.installService, _, _, _, _) = entries[entries.count - 2] else {
             return XCTFail("перед выходом — пункт сервиса (по умолчанию absent — «Установить»)")
@@ -188,6 +182,89 @@ final class StatusItemControllerTests: XCTestCase {
     func testMenuStructureRefreshDisabledWhileLoading() {
         let entries = StatusMenuStructure.entries(refreshEnabled: false)
         assertAction(actionEntry(.refresh, in: entries), id: .refresh, title: "button.refresh", shortcut: "r", enabled: false)
+    }
+
+    // MARK: - Секция Tunnels: позиция, видимость, блокировка строк
+
+    private func makeTunnels() -> [TunnelInfo] {
+        [TunnelInfo(name: "kvmka-ai", isUp: true), TunnelInfo(name: "kvmka-full", isUp: false)]
+    }
+
+    /// Секция целиком — между «Открыть конфиги» и сервисным пунктом:
+    /// разделитель + заголовок + по строке на туннель.
+    func testMenuStructureTunnelsSectionPositionAndRows() {
+        let entries = StatusMenuStructure.entries(serviceState: .installed, tunnels: makeTunnels())
+
+        XCTAssertEqual(entries.count, 11, "карточка, разделитель, Обновить, Конфиги, разделитель, заголовок, 2 строки, разделитель, сервис, Выход")
+
+        guard case .action(.openConfigs, _, _, _, _) = entries[3] else { return XCTFail("до секции — «Открыть конфиги»") }
+        guard case .separator = entries[4] else { return XCTFail("перед секцией — разделитель") }
+        guard case .tunnelsHeader(let title) = entries[5] else { return XCTFail("заголовок секции Tunnels") }
+        XCTAssertEqual(title, L10n.string("menu.tunnels_section"))
+        XCTAssertEqual(entries[6], .tunnelRow(TunnelInfo(name: "kvmka-ai", isUp: true), isEnabled: true))
+        XCTAssertEqual(entries[7], .tunnelRow(TunnelInfo(name: "kvmka-full", isUp: false), isEnabled: true))
+        guard case .separator = entries[8] else { return XCTFail("после секции — разделитель") }
+        guard case .action(.uninstallService, _, _, _, _) = entries[9] else { return XCTFail("installed — пункт «Удалить сервис»") }
+        guard case .action(.quit, _, _, _, _) = entries[10] else { return XCTFail("последний пункт — выход") }
+    }
+
+    /// Секция скрыта при любом состоянии, кроме живого демона — включая
+    /// заголовок и разделители (структура вырождается в базовую).
+    func testMenuStructureHidesTunnelsSectionUnlessInstalled() {
+        for state in [ServiceState.absent, .broken, .outdated] {
+            let entries = StatusMenuStructure.entries(serviceState: state, tunnels: makeTunnels())
+            XCTAssertFalse(
+                entries.contains { if case .tunnelsHeader = $0 { return true }; return false },
+                "в состоянии \(state) заголовка секции быть не должно"
+            )
+            XCTAssertFalse(
+                entries.contains { if case .tunnelRow = $0 { return true }; return false },
+                "в состоянии \(state) строк туннелей быть не должно"
+            )
+            XCTAssertEqual(entries.count, 7, "состояние \(state): базовая структура без секции")
+        }
+    }
+
+    /// Пустой список туннелей — секции нет целиком.
+    func testMenuStructureHidesTunnelsSectionWhenListIsEmpty() {
+        let entries = StatusMenuStructure.entries(serviceState: .installed, tunnels: [])
+
+        XCTAssertEqual(entries.count, 7)
+        XCTAssertFalse(entries.contains { if case .tunnelsHeader = $0 { return true }; return false })
+    }
+
+    /// Операция в полёте: все строки и «Обновить» некликабельны (одна
+    /// операция за раз; подавленный ⌘R — молчаливый no-op).
+    func testMenuStructureDisablesRowsAndRefreshDuringOperation() {
+        let entries = StatusMenuStructure.entries(
+            refreshEnabled: true,
+            serviceState: .installed,
+            tunnels: makeTunnels(),
+            hasInFlightTunnelOperation: true
+        )
+
+        XCTAssertEqual(entries[6], .tunnelRow(TunnelInfo(name: "kvmka-ai", isUp: true), isEnabled: false))
+        XCTAssertEqual(entries[7], .tunnelRow(TunnelInfo(name: "kvmka-full", isUp: false), isEnabled: false))
+        assertAction(actionEntry(.refresh, in: entries), id: .refresh, title: "button.refresh", shortcut: "r", enabled: false)
+    }
+
+    /// Ключ удалённого disabled-плейсхолдера «Управление тоннелями» не
+    /// должен возвращаться в таблицы.
+    func testRemovedTunnelManagementKeyIsGoneFromBothLocalizations() throws {
+        for language in ["en", "ru"] {
+            let lprojPath = try XCTUnwrap(
+                Bundle.module.path(forResource: language, ofType: "lproj"),
+                "нет \(language).lproj в бандле модуля"
+            )
+            let bundle = Bundle(path: lprojPath)
+            // localizedString(forKey:value:) при отсутствии ключа возвращает value
+            let raw = bundle?.localizedString(
+                forKey: "button.tunnel_management_soon",
+                value: "button.tunnel_management_soon",
+                table: "Localizable"
+            )
+            XCTAssertEqual(raw, "button.tunnel_management_soon", "мёртвый ключ должен быть удалён из \(language)")
+        }
     }
 
     // MARK: - Пункт сервиса: состояние → действие/титул, позиция перед «Выход»
@@ -262,7 +339,8 @@ final class StatusItemControllerTests: XCTestCase {
             from: entries,
             target: target,
             action: selector,
-            cardItemProvider: { cardItem }
+            cardItemProvider: { cardItem },
+            tunnelItemProvider: { _, _ in NSMenuItem() }
         )
 
         XCTAssertEqual(items.count, entries.count)
@@ -279,23 +357,59 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertTrue(refresh.target === target, "target-action идут в контроллер")
         XCTAssertEqual(refresh.action, selector)
 
-        let manageTunnels = items[4]
-        XCTAssertEqual(manageTunnels.title, L10n.string("button.tunnel_management_soon"))
-        XCTAssertFalse(manageTunnels.isEnabled, "управление тоннелями — disabled placeholder")
-        XCTAssertEqual(manageTunnels.keyEquivalent, "", "у placeholder нет шортката")
+        let openConfigs = items[3]
+        XCTAssertEqual(openConfigs.title, L10n.string("button.open_configs"))
+        XCTAssertEqual(openConfigs.tag, StatusMenuAction.openConfigs.rawValue)
 
-        XCTAssertTrue(items[5].isSeparatorItem)
+        XCTAssertTrue(items[4].isSeparatorItem)
 
-        let service = items[6]
+        let service = items[5]
         XCTAssertEqual(service.title, L10n.string("button.install_service"), "по умолчанию absent — «Установить сервис»")
         XCTAssertEqual(service.keyEquivalent, "", "у пункта сервиса нет шортката")
         XCTAssertEqual(service.tag, StatusMenuAction.installService.rawValue)
 
-        let quit = items[7]
+        let quit = items[6]
         XCTAssertEqual(quit.title, L10n.string("button.quit"))
         XCTAssertEqual(quit.keyEquivalent, "q")
         XCTAssertEqual(quit.keyEquivalentModifierMask, .command)
         XCTAssertEqual(quit.tag, StatusMenuAction.quit.rawValue)
+    }
+
+    /// Заголовок секции и строки: заголовок — неактивный нативный пункт,
+    /// строки приходят из провайдера с данными каждой.
+    func testFactoryBuildsHeaderAndTunnelRowsFromProviders() {
+        final class ActionTarget: NSObject {
+            @objc func handleMenuAction(_ sender: NSMenuItem) {}
+        }
+        let target = ActionTarget()
+        let selector = #selector(ActionTarget.handleMenuAction(_:))
+        let rowItem = TunnelMenuItem()
+        var providedTunnels: [TunnelInfo] = []
+        var providedEnabledFlags: [Bool] = []
+
+        let entries = StatusMenuStructure.entries(serviceState: .installed, tunnels: makeTunnels())
+        let items = StatusMenuFactory.makeItems(
+            from: entries,
+            target: target,
+            action: selector,
+            cardItemProvider: { CardMenuItem() },
+            tunnelItemProvider: { tunnel, isEnabled in
+                providedTunnels.append(tunnel)
+                providedEnabledFlags.append(isEnabled)
+                return rowItem
+            }
+        )
+
+        XCTAssertEqual(items.count, entries.count)
+
+        let header = items[5]
+        XCTAssertEqual(header.title, L10n.string("menu.tunnels_section"), "title остаётся для VoiceOver")
+        XCTAssertFalse(header.isEnabled, "заголовок секции — не действие")
+
+        XCTAssertTrue(items[6] === rowItem, "строки приходят из провайдера как есть")
+        XCTAssertTrue(items[7] === rowItem)
+        XCTAssertEqual(providedTunnels, makeTunnels(), "провайдер получает каждую строку секции")
+        XCTAssertEqual(providedEnabledFlags, [true, true])
     }
 
     // MARK: - Иконки меню-бара: загрузка из бандла, template, размер

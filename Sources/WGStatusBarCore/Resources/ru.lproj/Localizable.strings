@@ -2,13 +2,15 @@
 "status.stale_data" = "Данные устарели";
 "button.refresh" = "Обновить";
 "button.open_configs" = "Открыть конфиги WireGuard";
-"button.tunnel_management_soon" = "Управление тоннелями (скоро)";
 "button.install_service" = "Установить сервис";
 "button.update_service" = "Обновить сервис";
 "button.remove_service" = "Удалить сервис";
 "button.quit" = "Выход";
 "menu.title.on" = "wg: on";
 "menu.title.off" = "wg: off";
+"menu.tunnels_section" = "Тоннели";
+"tunnel.accessibility.on" = "Тоннель %@ включён";
+"tunnel.accessibility.off" = "Тоннель %@ выключен";
 "error.config_folder_not_found" = "Не найден каталог с конфигами WireGuard";
 "error.wg_show_failed" = "Команда `wg show all dump` завершилась с кодом %@";
 "error.wg_show_timeout" = "Время ожидания команды `wg show all dump` истекло";
