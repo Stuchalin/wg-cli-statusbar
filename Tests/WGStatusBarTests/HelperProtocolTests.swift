@@ -32,6 +32,27 @@ final class HelperProtocolTests: XCTestCase {
         )
     }
 
+    func testDecodeOkWithStatePayload() {
+        // Ответ `state`: строки всегда из 3 полей через `\t` — у `up` третье
+        // поле непустое (utun), у `down` пустое (строка кончается `\t\n`).
+        // Проходит те же правила decode, что и дамп: терминатор заголовка
+        // обязателен, payload пустой или завершён `\n`.
+        let state = "kvmka-ai\tup\tutun2\nkvmka-wg-full\tdown\t\n"
+        XCTAssertEqual(
+            decode(response: "ok 1 17\n\(state)"),
+            .ok(protocolVersion: 1, build: 17, dump: state)
+        )
+    }
+
+    func testDecodeOkWithEmptyStatePayload() {
+        // Пустой payload `state` — конфигов нет: то же правило, что пустой
+        // дамп show / успех без payload у up/down.
+        XCTAssertEqual(
+            decode(response: "ok 1 17\n"),
+            .ok(protocolVersion: 1, build: 17, dump: "")
+        )
+    }
+
     func testDecodeOkKeepsDumpVerbatimIncludingTrailingNewline() {
         // Демон отправляет дамп как есть — с финальным переводом строки от `wg`.
         let response = decode(response: "ok 2 7\nline1\nline2\n")
@@ -128,6 +149,7 @@ final class HelperProtocolTests: XCTestCase {
             "err 1 5 wg-missing", // err без \n — тоже усечён
             "ok 1 5\nwg0\t(no", // дамп оборван посреди строки
             "ok 1 5\nline1\nline2", // дамп без финального перевода строки
+            "ok 1 17\nkvmka\tup\tutun2", // payload state без финального `\n`
         ]
         for response in truncated {
             XCTAssertNil(
@@ -147,6 +169,11 @@ final class HelperProtocolTests: XCTestCase {
         XCTAssertEqual(encode(.list), "list\n")
         XCTAssertEqual(encode(.up("kvmka-ai")), "up kvmka-ai\n")
         XCTAssertEqual(encode(.down("kvmka-full")), "down kvmka-full\n")
+    }
+
+    func testEncodeStateRequest() {
+        // `state` — запрос без аргумента: одно слово + `\n`, как show/list.
+        XCTAssertEqual(encode(.state), "state\n")
     }
 
     // MARK: - Константы версий

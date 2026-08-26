@@ -8,12 +8,16 @@ public let helperProtocolVersion = 1
 /// Монотонный номер билда демона: бампируется с каждым релизом хелпера
 /// (release-чеклист). Приложение сравнивает его с ответом демона — устаревший
 /// бинарь предлагается обновить пунктом «Обновить сервис».
-public let helperBuildNumber = 16
+public let helperBuildNumber = 17
 
 /// Запрос приложения к демону (line-based: соединение = один запрос).
 public enum HelperRequest {
     case show
     case list
+    /// Состояние туннелей по каталогу конфигов демона: строки
+    /// `имя\tup\tutunN` / `имя\tdown\t` (демон — root, `/var/run/wireguard`
+    /// читаем только ему; приложение состояния не выводит из дампа).
+    case state
     case up(String)
     case down(String)
 }
@@ -35,7 +39,7 @@ public enum HelperResponse: Equatable {
     case err(protocolVersion: Int, build: Int, code: HelperResponseCode, detail: String?)
 }
 
-/// Кодирует запрос в строку wire-протокола (`show\n`, `list\n`,
+/// Кодирует запрос в строку wire-протокола (`show\n`, `list\n`, `state\n`,
 /// `up <name>\n`, `down <name>\n`).
 public func encode(_ request: HelperRequest) -> String {
     switch request {
@@ -43,6 +47,8 @@ public func encode(_ request: HelperRequest) -> String {
         return "show\n"
     case .list:
         return "list\n"
+    case .state:
+        return "state\n"
     case .up(let name):
         return "up \(name)\n"
     case .down(let name):
@@ -53,8 +59,10 @@ public func encode(_ request: HelperRequest) -> String {
 /// Разбирает ответ демона: первая строка — заголовок
 /// (`ok <protocol> <build>` или `err <protocol> <build> <code> [деталь]`),
 /// всё после неё — payload для `ok` (поле `dump`): дамп `show`, список имён
-/// туннелей `list` (по одному в строке, каждое с `\n`) или пусто (`up`/`down`
-/// отвечают успехом без payload). Правила для всех видов payload одни —
+/// туннелей `list` (по одному в строке, каждое с `\n`), строки состояния
+/// `state` (всегда 3 поля через `\t`: `имя\tup\tutunN` / `имя\tdown\t`) или
+/// пусто (`up`/`down` отвечают успехом без payload; пустой payload `state` —
+/// конфигов нет). Правила для всех видов payload одни —
 /// они сформулированы для дампа и покрывают список имён и пустой ответ
 /// без правок. Текст не подошёл под формат → `nil`, вызывающий считает
 /// ответ битым.

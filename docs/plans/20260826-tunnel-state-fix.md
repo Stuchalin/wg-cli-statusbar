@@ -50,10 +50,10 @@
 - [x] полный сьют зелёный
 
 ### Task 2: Протокол — запрос `state`, bump build
-- [ ] `HelperRequest` += `.state`; `encode` → `state\n`
-- [ ] bump `helperBuildNumber` 16 → 17 (helper-код меняется; версия протокола остаётся 1; новых err-кодов нет — ответы state используют существующие `ok`/`err`, исчерпывающие switch'ы клиентов не ломаются)
-- [ ] тесты `HelperProtocolTests`: encode round-trip `.state`; `ok` с payload трёхполевых строк проходит существующие правила decode (терминатор заголовка, payload пустой или с `\n`)
-- [ ] полный сьют зелёный
+- [x] `HelperRequest` += `.state`; `encode` → `state\n`
+- [x] bump `helperBuildNumber` 16 → 17 (helper-код меняется; версия протокола остаётся 1; новых err-кодов нет — ответы state используют существующие `ok`/`err`, исчерпывающие switch'ы клиентов не ломаются)
+- [x] тесты `HelperProtocolTests`: encode round-trip `.state`; `ok` с payload трёхполевых строк проходит существующие правила decode (терминатор заголовка, payload пустой или с `\n`)
+- [x] полный сьют зелёный
 
 ### Task 3: Демон — маршрутизация `state`
 - [ ] `handleClient`: `case "state" where argument == nil` → из `configStore.names()` × пар ридера: строки `name\tup\tutunN` / `name\tdown\t` (у опущенных utun-поле пустое; всегда 3 поля); конфиг «поднят» ⟺ валидная пара ридера есть; `show`/`list`/`up`/`down` не меняются
