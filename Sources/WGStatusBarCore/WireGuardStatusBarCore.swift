@@ -167,10 +167,19 @@ public final class WireGuardStatusModel: ObservableObject {
     /// (сокет-файл + исход обмена) — не хранится, пересчитывается на каждом
     /// refresh. Управляет пунктом меню установки/обновления/удаления сервиса.
     @Published public private(set) var serviceState: ServiceState = .absent
-    /// Туннели из конфигов wg-quick (демон, `list`): имена + выведенный isUp.
-    /// Данные меню — оппортунистические: ошибки `loadTunnels()` глотаются,
-    /// статус карточки от них не зависит.
+    /// Туннели из конфигов wg-quick (демон, запрос `state`): имена + isUp —
+    /// данные демона, а не вывод модели (`/var/run/wireguard` читаем только
+    /// root, приложение состояние из дампа не выводит). Данные меню —
+    /// оппортунистические: ошибки `loadTunnels()` глотаются, статус карточки
+    /// от них не зависит.
     @Published public private(set) var tunnels: [TunnelInfo] = []
+    /// Маппинг имён интерфейсов из последнего ответа `state` (`utun → имя
+    /// конфига`): демон — источник имён в daemon-режиме (`.name`-файлы под
+    /// root, namer в приложении промахивается всегда), поэтому применяется
+    /// ПОВЕРХ namer-резолва на обоих путях записи displayName (`loadTunnels`
+    /// и 5-с тик); namer остаётся для непокрытых интерфейсов и dev-режима
+    /// без демона.
+    private var stateInterfaceNames: [String: String] = [:]
     /// Имена туннелей с операцией в полёте (наличие имени = in-flight): строки
     /// меню некликабельны, show-тик подавлен, снапшот не устаревает.
     /// Отдельного состояния «failed» нет — ошибку несёт существующий one-tick
@@ -339,8 +348,7 @@ public final class WireGuardStatusModel: ObservableObject {
                 )
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
-                    self.interfaces = parsed
-                    self.recomputeTunnelStates()
+                    self.interfaces = Self.applyingStateInterfaceNames(self.stateInterfaceNames, to: parsed)
                     self.lastSuccessAt = self.now()
                     self.isLoading = false
                     self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))
@@ -387,6 +395,25 @@ public final class WireGuardStatusModel: ObservableObject {
             }
         }
 
+        return resolved
+    }
+
+    /// Проставляет интерфейсам `displayName` из state-маппинга демона — ПОВЕРХ
+    /// namer-резолва: демон читает `.name`-файлы под root и в daemon-режиме
+    /// точнее (регрессия фикса: без этого 5-с тик возвращал бы `utunN` при
+    /// namer-промахе, а карточка теряла имя конфига при открытом меню).
+    /// Интерфейсов вне маппинга не трогает — их имя остаётся от namer'а.
+    private static func applyingStateInterfaceNames(
+        _ mapping: [String: String],
+        to interfaces: [WGInterface]
+    ) -> [WGInterface] {
+        guard !mapping.isEmpty else { return interfaces }
+        var resolved = interfaces
+        for index in resolved.indices {
+            if let name = mapping[resolved[index].name] {
+                resolved[index].displayName = name
+            }
+        }
         return resolved
     }
 
@@ -445,47 +472,47 @@ public final class WireGuardStatusModel: ObservableObject {
 
     // MARK: - Туннели
 
-    /// Туннель поднят ⟺ какой-то интерфейс снапшота носит его имя: namer
-    /// резолвит `utunN` → имя конфига wg-quick в `displayName`, а единственный
-    /// источник правды о состоянии — `wg show`.
-    ///
-    /// Честная оговорка: при нерезолве namer'а (displayName остался `utunN` —
-    /// `.name`-файл потерян или интерфейс поднят вне wg-quick) строка
-    /// показывает «выключен», а клик up приносит err от wg-quick («interface
-    /// already exists») — карточка покажет общую ошибку операции (деталь на
-    /// wire не приходит). Расхождение живёт, пока туннель не пересоздадут:
-    /// самоизлечения нет.
-    public func isTunnelUp(named name: String) -> Bool {
-        interfaces.contains { $0.displayName == name }
-    }
-
-    /// Подтягивает список туннелей демона (`list` → имена; isUp выводится из
-    /// текущего снапшота). Триггеры: открытие меню, ответ up/down, переход
-    /// serviceState при открытом меню — НЕ 5-секундный тик. Ошибки глотаются
-    /// молча: данные меню оппортунистические, не источник статуса (иначе
-    /// dev-фолбэк без демона получал бы ложную ошибку на карточке). До
-    /// `.installed` демон не дёргается вовсе: у старого build `list` —
-    /// unknown command.
+    /// Подтягивает состояние туннелей демона (`state` → имена + isUp + маппинг
+    /// имён интерфейсов). Триггеры: открытие меню, ответ up/down, переход
+    /// serviceState при открытом меню — НЕ 5-секундный тик (тики `tunnels` не
+    /// переворачивают: состояние — данные демона, снапшот здесь не при делах).
+    /// Ошибки глотаются молча: данные меню оппортунистические, не источник
+    /// статуса (иначе dev-фолбэк без демона получал бы ложную ошибку на
+    /// карточке); строки и имена держат последнее известное. До `.installed`
+    /// демон не дёргается вовсе: у старого build `state` — unknown command.
     public func loadTunnels() {
         guard serviceState == .installed else { return }
         let client = tunnelCommandRunner
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let names = try await client.list()
-                let updated = names.map { TunnelInfo(name: $0, isUp: self.isTunnelUp(named: $0)) }
-                // Без изменений — без republish (как recomputeTunnelStates):
-                // идентичный список не должен пересобирать открытое меню.
+                let states = try await client.state()
+                let mapping = Dictionary(
+                    states.compactMap { state in state.utun.map { ($0, state.name) } },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                self.stateInterfaceNames = mapping
+                // Первый путь записи displayName поверх namer'а: ответ state
+                // переименовывает карточку живьём (открытое меню), не дожидаясь
+                // 5-с тика.
+                let renamed = Self.applyingStateInterfaceNames(mapping, to: self.interfaces)
+                if renamed != self.interfaces {
+                    self.interfaces = renamed
+                }
+                let updated = states.map { TunnelInfo(name: $0.name, isUp: $0.isUp) }
+                // Без изменений — без republish: идентичный список не должен
+                // пересобирать открытое меню.
                 if updated != self.tunnels {
                     self.tunnels = updated
                 }
             } catch {
-                // Молча: список конфигов — не источник статуса.
+                // Молча: строки и имена держат последнее известное.
             }
         }
     }
 
-    /// Клик по строке туннеля: направление — из `isTunnelUp`, операция — через
+    /// Клик по строке туннеля: направление — из `tunnels` (последний ответ
+    /// `state`; строки без ответа честно читаются «down»), операция — через
     /// демон. Пока имя в `inFlightTunnels`, show-тик подавлен и снапшот не
     /// устаревает. Успех → немедленный `refresh()` + `loadTunnels()`;
     /// провал → one-tick `lastFailure` + `loadTunnels()` БЕЗ refresh — пролог
@@ -498,7 +525,7 @@ public final class WireGuardStatusModel: ObservableObject {
         // ровно для одной операции; клик до того, как строки ушли в disabled
         // (ре-ренд SwiftUI асинхронен), — молчаливый no-op.
         guard inFlightTunnels.isEmpty else { return }
-        let shouldTearDown = isTunnelUp(named: name)
+        let shouldTearDown = tunnels.first(where: { $0.name == name })?.isUp ?? false
         inFlightTunnels.insert(name)
         let client = tunnelCommandRunner
         Task { @MainActor [weak self] in
@@ -517,16 +544,6 @@ public final class WireGuardStatusModel: ObservableObject {
                 self.lastFailure = Self.failure(from: error)
                 self.loadTunnels()
             }
-        }
-    }
-
-    /// isUp строк пересчитывается из свежего снапшота после каждого успешного
-    /// тика (`list` отдаёт только имена). Без изменений — без republish.
-    private func recomputeTunnelStates() {
-        guard !tunnels.isEmpty else { return }
-        let updated = tunnels.map { TunnelInfo(name: $0.name, isUp: isTunnelUp(named: $0.name)) }
-        if updated != tunnels {
-            tunnels = updated
         }
     }
 

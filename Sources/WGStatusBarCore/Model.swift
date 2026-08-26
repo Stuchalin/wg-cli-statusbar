@@ -57,10 +57,11 @@ public struct WGPeer: Identifiable, Equatable {
     }
 }
 
-/// Туннель из конфигов wg-quick (демон, запрос `list`): имя = basename
-/// конфига. `isUp` — не данные демона, а вывод модели из текущего снапшота
-/// `wg show` (`WireGuardStatusModel.isTunnelUp(named:)`): пересчитывается на
-/// каждом успешном тике и каждом ответе `list`.
+/// Туннель из конфигов wg-quick (демон, запрос `state`): имя = basename
+/// конфига. `isUp` — данные демона, а не вывод модели: `/var/run/wireguard`
+/// читаем только root, приложение состояние из дампа не выводит.
+/// Обновляется каждым ответом `state` (открытие меню, ответ up/down, переход
+/// serviceState) — 5-с тик его не переворачивает.
 public struct TunnelInfo: Equatable {
     public let name: String
     public let isUp: Bool

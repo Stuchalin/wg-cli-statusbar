@@ -163,8 +163,6 @@ final class StatusItemControllerTests: XCTestCase {
         private let lock = NSLock()
         private var continuation: CheckedContinuation<Void, Never>?
 
-        func list() async throws -> [String] { [] }
-
         func state() async throws -> [TunnelState] { [] }
 
         func up(_ name: String) async throws {

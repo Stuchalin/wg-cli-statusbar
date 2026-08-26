@@ -27,8 +27,9 @@ public struct TunnelRowViewModel: Equatable {
 
 /// Строка туннеля секции Tunnels: ●/○ + имя, спиннер при операции, клик —
 /// toggle. Наблюдает модель (`@ObservedObject`): спиннер, кликабельность и
-/// isUp обновляются живьём без пересборки меню — isUp выводится из снапшота
-/// интерфейсов (`isTunnelUp`), isBusy/isEnabled — из `inFlightTunnels`.
+/// isUp обновляются живьём без пересборки меню — isUp выводится lookup'ом из
+/// `tunnels` (последний ответ `state` — демон источник состояния, снапшот
+/// интерфейсов здесь не при делах), isBusy/isEnabled — из `inFlightTunnels`.
 /// Клик внутри view-based пункта не закрывает меню (`TunnelMenuItem`,
 /// прецедент — интерактивные контролы карточки).
 struct TunnelRowView: View {
@@ -49,7 +50,7 @@ struct TunnelRowView: View {
     private var row: TunnelRowViewModel {
         TunnelRowViewModel(
             name: tunnelName,
-            isUp: model.isTunnelUp(named: tunnelName),
+            isUp: model.tunnels.first(where: { $0.name == tunnelName })?.isUp ?? false,
             inFlightTunnels: model.inFlightTunnels
         )
     }

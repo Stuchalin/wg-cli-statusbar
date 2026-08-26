@@ -288,34 +288,6 @@ final class SocketTunnelClientTests: XCTestCase {
 
     // MARK: - Round-trip с реальным DaemonServer
 
-    func testListReturnsNamesFromDaemon() async throws {
-        let socketPath = makeSocketPath()
-        try await startServer(
-            socketPath: socketPath,
-            configStore: makeConfigStore(names: ["kvmka-ai", "kvmka-full"]),
-            tunnelExecutor: StubTunnelExecutor()
-        )
-
-        let client = SocketTunnelClient(socketPath: socketPath)
-        let names = try await client.list()
-
-        XCTAssertEqual(names, ["kvmka-ai", "kvmka-full"], "list возвращает имена конфигов демона")
-    }
-
-    func testListEmptyConfigSetReturnsNoNames() async throws {
-        let socketPath = makeSocketPath()
-        try await startServer(
-            socketPath: socketPath,
-            configStore: makeConfigStore(names: []),
-            tunnelExecutor: StubTunnelExecutor()
-        )
-
-        let client = SocketTunnelClient(socketPath: socketPath)
-        let names = try await client.list()
-
-        XCTAssertEqual(names, [], "пустой ok-payload — пустой список, не ошибка")
-    }
-
     func testUpDownRoundTripCallsExecutor() async throws {
         let socketPath = makeSocketPath()
         let executor = StubTunnelExecutor()
@@ -569,7 +541,6 @@ final class SocketTunnelClientTests: XCTestCase {
         let stalePath = makeSocketPath()
         try makeStaleSocketFile(path: stalePath)
         let staleClient = SocketTunnelClient(socketPath: stalePath)
-        await assertThrowsStatusFailure(.connectionRefused) { try await staleClient.list() }
         await assertThrowsStatusFailure(.connectionRefused) { try await staleClient.state() }
         await assertThrowsStatusFailure(.connectionRefused) { try await staleClient.up("kvmka-ai") }
 
@@ -577,7 +548,7 @@ final class SocketTunnelClientTests: XCTestCase {
         let missingClient = SocketTunnelClient(
             socketPath: "/tmp/wgstatusbar-tunnelclienttests-missing.sock"
         )
-        await assertThrowsStatusFailure(.connectionRefused) { try await missingClient.list() }
+        await assertThrowsStatusFailure(.connectionRefused) { try await missingClient.state() }
     }
 
     func testSilenceUntilDeadlineMapsToGenericOpFailure() async throws {
@@ -609,7 +580,7 @@ final class SocketTunnelClientTests: XCTestCase {
         let garbagePath = makeSocketPath()
         try serveOneConnection(path: garbagePath, response: "definitely not a protocol header\n")
         let garbageClient = SocketTunnelClient(socketPath: garbagePath)
-        await assertThrowsStatusFailure(.badResponse) { try await garbageClient.list() }
+        await assertThrowsStatusFailure(.badResponse) { try await garbageClient.state() }
 
         let eofPath = makeSocketPath()
         try serveOneConnection(path: eofPath, response: nil)
@@ -622,9 +593,9 @@ final class SocketTunnelClientTests: XCTestCase {
     func testForeignHeaderVersionsMapToDaemonOutdated() async throws {
         let cases: [String] = [
             // Чужой протокол в ok.
-            "ok \(helperProtocolVersion + 1) \(helperBuildNumber)\nkvmka-ai\n",
-            // Старый build в ok — демон до туннельных команд.
-            "ok \(helperProtocolVersion) \(helperBuildNumber - 1)\nkvmka-ai\n",
+            "ok \(helperProtocolVersion + 1) \(helperBuildNumber)\nkvmka-ai\tup\tutun2\n",
+            // Старый build в ok — демон до команды state.
+            "ok \(helperProtocolVersion) \(helperBuildNumber - 1)\nkvmka-ai\tup\tutun2\n",
             // Чужой протокол в err — outdated бьёт код ошибки.
             "err \(helperProtocolVersion + 1) \(helperBuildNumber) wg-quick-missing\n",
             // Старый build в err: unknown command от старого бинаря демона.
@@ -634,7 +605,7 @@ final class SocketTunnelClientTests: XCTestCase {
             let socketPath = makeSocketPath()
             try serveOneConnection(path: socketPath, response: response)
             let client = SocketTunnelClient(socketPath: socketPath)
-            await assertThrowsStatusFailure(.daemonOutdated) { try await client.list() }
+            await assertThrowsStatusFailure(.daemonOutdated) { try await client.state() }
         }
     }
 
