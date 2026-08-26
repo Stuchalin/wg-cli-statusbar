@@ -792,6 +792,70 @@ final class WGStatusBarTests: XCTestCase {
         waitUntil({ model.inFlightTunnels.isEmpty }, "операция должна завершиться и снять имя")
     }
 
+    /// Одна операция за раз — инвариант модели, не только UI (строки уходят в
+    /// disabled асинхронным ре-рендером): пока операция в полёте, повторный
+    /// клик — по тому же или другому туннелю — молчаливый no-op. Иначе пара
+    /// операций в последовательной очереди демона (4 + 9 + 9 = 22 c)
+    /// переваливает клиентский дедлайн 16 c — вторая ложной ошибкой.
+    func testSecondToggleDuringInFlightOperationIsSilentNoOp() {
+        let client = MockTunnelClient()
+        client.configure(gate: true)
+        let model = WireGuardStatusModel(
+            commandRunner: StubCommandRunner(results: [.success("")]),
+            tunnelNamer: MockTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath,
+            tunnelCommandRunner: client
+        )
+        model.refresh()
+        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        model.toggleTunnel(named: "kvmka-ai")
+        waitUntil({ !client.upCalls.isEmpty }, "первая операция должна стартовать")
+
+        model.toggleTunnel(named: "kvmka-ai")  // тот же туннель
+        model.toggleTunnel(named: "kvmka-full")  // другой туннель
+        spinRunLoop()
+
+        XCTAssertEqual(client.upCalls, ["kvmka-ai"], "вторая операция не должна стартовать")
+        XCTAssertTrue(client.downCalls.isEmpty, "down не должен вызываться вовсе")
+        XCTAssertEqual(model.inFlightTunnels, ["kvmka-ai"], "в полёте — ровно одна операция")
+
+        client.releaseGate()
+        waitUntil({ model.inFlightTunnels.isEmpty }, "операция должна завершиться и снять имя")
+    }
+
+    /// Успех операции перезаливает список (строки сходятся к снапшоту без
+    /// ожидания следующего открытия меню): loadTunnels вызывается и после
+    /// успешного up/down, не только после провала.
+    func testToggleSuccessReloadsTunnelsOnInstalledDaemon() {
+        let client = MockTunnelClient()
+        client.configure(
+            listResults: [.success(["kvmka-ai"]), .success(["kvmka-ai"])],
+            opResults: [.success(())],
+            gate: true
+        )
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump("")),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "list должен заполнить tunnels"
+        )
+        XCTAssertEqual(client.listCalls, 1, "предусловие: один list на заполнение")
+
+        model.toggleTunnel(named: "kvmka-ai")
+        waitUntil({ !client.upCalls.isEmpty }, "опущенный туннель должен уйти в up")
+        client.releaseGate()
+        waitUntil(
+            { model.inFlightTunnels.isEmpty && client.listCalls == 2 },
+            "успех обязан перезапросить список туннелей"
+        )
+    }
+
     /// In-flight операция глушит show-тик: refresh не запускается вовсе — без
     /// ошибки, без смены serviceState, раннер не дёргается; снапшот не
     /// устаревает, даже когда операция пережила stalenessLimit.

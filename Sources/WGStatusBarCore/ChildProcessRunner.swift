@@ -113,6 +113,48 @@ internal enum ChildProcessError: Error {
 /// TERM в `timeout` → KILL ещё через `killGrace` → ограниченное ожидание,
 /// отмена задачи через `ChildProcessHandle`. Выделен из прежнего
 /// `WGShowExecutor.runWGSync`; классификацию результата не делает.
+///
+/// Две точки входа: асинхронная (ниже) — для исполнителей демона, владеет
+/// `ChildProcessHandle` и проводкой отмены задачи сама; синхронная с явным
+/// `handle:` — ядро, отдельный параметр оставлен ради теста гонки
+/// register → cancel → run.
+internal func runChildProcess(
+    executableURL: URL,
+    arguments: [String],
+    environment: [String: String]?,
+    timeout: TimeInterval,
+    killGrace: TimeInterval
+) async throws -> ChildProcessResult {
+    let handle = ChildProcessHandle(killGrace: killGrace)
+    // Блокирующее ожидание уходит с кооперативного пула; отмена задачи
+    // будит его сигналом ребёнку. Ошибки остаются ChildProcessError — перевод
+    // в типы исполнителя на вызывающем.
+    return try await withTaskCancellationHandler {
+        try await withCheckedThrowingContinuation { continuation in
+            Task.detached {
+                do {
+                    continuation.resume(
+                        returning: try runChildProcess(
+                            handle: handle,
+                            executableURL: executableURL,
+                            arguments: arguments,
+                            environment: environment,
+                            timeout: timeout,
+                            killGrace: killGrace
+                        )
+                    )
+                } catch {
+                    // runChildProcess кидает только ChildProcessError —
+                    // ветка недостижима, но continuation не должен висеть.
+                    continuation.resume(throwing: error)
+                }
+            }
+        }
+    } onCancel: {
+        handle.cancel()
+    }
+}
+
 internal func runChildProcess(
     handle: ChildProcessHandle,
     executableURL: URL,

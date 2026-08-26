@@ -73,37 +73,19 @@ public final class WGShowExecutor: WGShowExecuting {
             throw WGShowExecutorError.wgMissing
         }
 
-        // Блокирующее ожидание уходит с кооперативного пула; отмена задачи
-        // (клиент ушёл по EOF) будит его сигналом ребёнку.
-        let handle = ChildProcessHandle(killGrace: killGrace)
-        let executableURL = URL(fileURLWithPath: binaryPath)
-        let arguments = self.arguments
-        let timeout = self.timeout
-        let killGrace = self.killGrace
-        let result = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                Task.detached {
-                    do {
-                        let raw = try runChildProcess(
-                            handle: handle,
-                            executableURL: executableURL,
-                            arguments: arguments,
-                            environment: nil,
-                            timeout: timeout,
-                            killGrace: killGrace
-                        )
-                        continuation.resume(returning: raw)
-                    } catch let error as ChildProcessError {
-                        continuation.resume(throwing: Self.translate(error))
-                    } catch {
-                        // runChildProcess кидает только ChildProcessError —
-                        // ветка недостижима, но continuation не должен висеть.
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-        } onCancel: {
-            handle.cancel()
+        // Отмена задачи (клиент ушёл по EOF) — забота раннера: он же убивает
+        // ребёнка сигналом. Окружение наследуется (nil).
+        let result: ChildProcessResult
+        do {
+            result = try await runChildProcess(
+                executableURL: URL(fileURLWithPath: binaryPath),
+                arguments: arguments,
+                environment: nil,
+                timeout: timeout,
+                killGrace: killGrace
+            )
+        } catch let error as ChildProcessError {
+            throw Self.translate(error)
         }
         return try Self.classify(result)
     }

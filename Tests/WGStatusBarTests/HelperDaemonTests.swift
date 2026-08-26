@@ -365,18 +365,24 @@ final class HelperDaemonTests: XCTestCase {
         let executor = StubExecutor()
         try await startServer(executor: executor)
 
-        // Успешный возврат readToEOF = сервер закрыл соединение после ответа.
-        let exchange = try performExchange("bogus\n")
-        let response = try XCTUnwrap(decode(response: exchange.response))
-        XCTAssertEqual(
-            response,
-            .err(
-                protocolVersion: helperProtocolVersion,
-                build: helperBuildNumber,
-                code: .wgFailed,
-                detail: "unknown command: bogus"
+        // Хвост у show/list держит команду неизвестной: безадресные команды
+        // аргументов не принимают (не «show extra» после появления list/up/down).
+        let bogusRequests = ["bogus\n", "show extra\n", "list extra\n"]
+        for request in bogusRequests {
+            // Успешный возврат readToEOF = сервер закрыл соединение после ответа.
+            let exchange = try performExchange(request)
+            let response = try XCTUnwrap(decode(response: exchange.response))
+            XCTAssertEqual(
+                response,
+                .err(
+                    protocolVersion: helperProtocolVersion,
+                    build: helperBuildNumber,
+                    code: .wgFailed,
+                    detail: "unknown command: \(request.trimmingCharacters(in: .whitespacesAndNewlines))"
+                ),
+                "для запроса \(request)"
             )
-        )
+        }
         XCTAssertEqual(executor.callCount, 0, "неизвестная команда не должна трогать исполнителя")
     }
 

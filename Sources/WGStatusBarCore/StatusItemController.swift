@@ -210,6 +210,10 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// изменению `tunnels` нужна только открытому — закрытое соберётся свежим
     /// при следующем открытии.
     private var isMenuOpen = false
+    /// Состояние сервиса последней реакции: смена при открытом меню меняет и
+    /// видимость секции Tunnels — без отслеживания секция жила бы своей
+    /// жизнью (пункт сервиса обновляется живьём отдельно).
+    private var lastServiceState: ServiceState = .absent
     private weak var menu: NSMenu?
     /// Хостинг-вью карточки последней сборки — для перемера высоты (ⓘ-легенда).
     private var cardHostingView: NSHostingView<StatusCardView>?
@@ -257,6 +261,20 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         updateRefreshItemEnabledState()
         updateServiceItem()
         resizeCardToContent()
+        serviceStateDidChange()
+    }
+
+    /// Смена состояния сервиса при открытом меню меняет и секцию Tunnels:
+    /// демон умер — строки обязаны исчезнуть (клик по ним — гарантированный
+    /// connectionRefused), демон появился — список подтягивается, не дожидаясь
+    /// переоткрытия меню. Закрытое меню соберётся свежим при следующем открытии.
+    private func serviceStateDidChange() {
+        let serviceState = model.serviceState
+        guard serviceState != lastServiceState else { return }
+        lastServiceState = serviceState
+        guard isMenuOpen else { return }
+        model.loadTunnels()
+        rebuildMenu()
     }
 
     /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg или устаревший

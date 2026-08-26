@@ -320,8 +320,9 @@ final class SocketTunnelClientTests: XCTestCase {
         let client = SocketTunnelClient(socketPath: socketPath)
 
         // quickMissing → своя строка; timedOut/failed → общий провал операции.
-        // failed несёт stderr-хвост (деталь демона в лог, не на wire) — ассерт
-        // «текст без детали» ловит утечку, если бы демон её всё-таки прислал.
+        // Деталь failed (stderr-хвост) не пересекает wire — демон отвечает
+        // кодом; равенство с ожидаемым .generic ловит утечку, если бы деталь
+        // всё-таки попала в сообщение.
         let cases: [(thrown: Error, expected: StatusFailure)] = [
             (WGQuickExecutorError.quickMissing, .generic(L10n.string("error.wgquick_missing"))),
             (WGQuickExecutorError.timedOut, .generic(L10n.string("error.tunnel_op_failed"))),
@@ -335,26 +336,65 @@ final class SocketTunnelClientTests: XCTestCase {
             await assertThrowsStatusFailure(testCase.expected) {
                 try await client.up("kvmka-ai")
             }
-            if case .generic(let message) = testCase.expected {
-                XCTAssertFalse(
-                    message.contains("secret-echo"),
-                    "деталь stderr wg-quick не должна попадать в сообщение клиенту"
-                )
-            }
         }
     }
 
-    func testLocalizedMessagesMapToL10nStrings() {
-        // Строки существуют в обоих словарях и не пересекаются с show-ошибками.
-        XCTAssertEqual(
-            StatusFailure.generic(L10n.string("error.wgquick_missing")).localizedMessage,
-            L10n.string("error.wgquick_missing")
+    func testErrDetailOnWireIsIgnoredByClient() async throws {
+        // Демон туннельные ошибки шлёт без детали (stderr-хвост — только в его
+        // лог). Клиент обязан игнорировать деталь, даже если она пришла:
+        // wg-quick эхом печатает команды и хуки конфига — показывать её нельзя.
+        let socketPath = makeSocketPath()
+        try serveOneConnection(
+            path: socketPath,
+            response: "err \(helperProtocolVersion) \(helperBuildNumber) wg-failed leaked secret-echo\n"
         )
-        XCTAssertNotEqual(
-            L10n.string("error.tunnel_op_failed"),
-            L10n.string("error.wg_show_timeout"),
-            "тишина операции маппится в общий провал, а не в commandTimeout про wg show"
+
+        let client = SocketTunnelClient(socketPath: socketPath)
+        await assertThrowsStatusFailure(.generic(L10n.string("error.tunnel_op_failed"))) {
+            try await client.up("kvmka-ai")
+        }
+    }
+
+    func testWGMissingWithMatchingVersionsMapsToTypedWGMissing() async throws {
+        // Защитная ветка исчерпывающего switch: живой демон туннельным
+        // операциям wg-missing не шлёт (отсутствие wg внутри wg-quick —
+        // wg-failed), но код обязан маппиться в типизированный wgMissing,
+        // а не в .generic.
+        let socketPath = makeSocketPath()
+        try serveOneConnection(
+            path: socketPath,
+            response: "err \(helperProtocolVersion) \(helperBuildNumber) wg-missing\n"
         )
+
+        let client = SocketTunnelClient(socketPath: socketPath)
+        await assertThrowsStatusFailure(.wgMissing) { try await client.up("kvmka-ai") }
+    }
+
+    func testTunnelKeysExistInBothLocalizations() throws {
+        // Гигиена: отсутствие ключа в таблице не ловится ничем другим — UI
+        // показал бы сырой ключ вместо строки.
+        let keys = [
+            "error.wgquick_missing",
+            "error.tunnel_not_found",
+            "error.tunnel_op_failed",
+            "menu.tunnels_section",
+            "tunnel.accessibility.on",
+            "tunnel.accessibility.off",
+        ]
+        for language in ["en", "ru"] {
+            let lprojPath = try XCTUnwrap(
+                Bundle.module.path(forResource: language, ofType: "lproj"),
+                "нет \(language).lproj в бандле модуля"
+            )
+            let bundle = Bundle(path: lprojPath)
+            for key in keys {
+                // localizedString(forKey:value:) при отсутствии ключа возвращает value
+                let raw = bundle?.localizedString(forKey: key, value: key, table: "Localizable")
+                XCTAssertNotEqual(raw, key, "ключ \(key) отсутствует в \(language)")
+            }
+        }
+        // Тишина операции — общий провал, не commandTimeout про wg show.
+        XCTAssertNotEqual(L10n.string("error.tunnel_op_failed"), L10n.string("error.wg_show_timeout"))
     }
 
     // MARK: - недоступность демона

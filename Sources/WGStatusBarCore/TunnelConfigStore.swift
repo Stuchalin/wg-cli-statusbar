@@ -3,7 +3,11 @@ import Foundation
 /// Пути поиска конфигов wg-quick для демона — `CONFIG_SEARCH_PATHS` из самого
 /// скрипта wg-quick (строка 44, порядок сохранён: система, x86-Homebrew,
 /// arm64-Homebrew), плюс MacPorts-префикс `/opt/local` для паритета с
-/// `wgQuickBinarySearchPaths`. Отсутствующая директория просто пропускается.
+/// `wgQuickBinarySearchPaths` (MacPorts-сборка wg-quick патчит свой префикс в
+/// CONFIG_SEARCH_PATHS). Отсутствующая директория просто пропускается.
+/// Известная ниша смешанной установки: brew-wg-quick в `/opt/local` не ищет —
+/// конфиг, лежащий только там, попадает в `list` и валидацию, но `wg-quick up`
+/// умрёт «does not exist» (явная ошибка операции, состояние не портится).
 public let tunnelConfigSearchPaths = [
     "/etc/wireguard",
     "/usr/local/etc/wireguard",

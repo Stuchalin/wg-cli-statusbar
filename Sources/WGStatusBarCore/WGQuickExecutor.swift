@@ -91,37 +91,21 @@ public final class WGQuickExecutor: WGQuickExecuting {
             throw WGQuickExecutorError.quickMissing
         }
 
-        let handle = ChildProcessHandle(killGrace: killGrace)
-        let executableURL = URL(fileURLWithPath: binaryPath)
-        let timeout = self.timeout
-        let killGrace = self.killGrace
         // Под launchd наследовать окружение демона нельзя: без brew-директорий
         // в PATH wg-quick погибает на shebang `env bash` (системный 3.2).
+        // Отмена задачи (shutdown демона) — забота раннера.
         let environment = ["PATH": Self.childPath(resolverDirectories: resolver.searchDirectories)]
-        let result = try await withTaskCancellationHandler {
-            try await withCheckedThrowingContinuation { continuation in
-                Task.detached {
-                    do {
-                        let raw = try runChildProcess(
-                            handle: handle,
-                            executableURL: executableURL,
-                            arguments: arguments,
-                            environment: environment,
-                            timeout: timeout,
-                            killGrace: killGrace
-                        )
-                        continuation.resume(returning: raw)
-                    } catch let error as ChildProcessError {
-                        continuation.resume(throwing: Self.translate(error))
-                    } catch {
-                        // runChildProcess кидает только ChildProcessError —
-                        // ветка недостижима, но continuation не должен висеть.
-                        continuation.resume(throwing: error)
-                    }
-                }
-            }
-        } onCancel: {
-            handle.cancel()
+        let result: ChildProcessResult
+        do {
+            result = try await runChildProcess(
+                executableURL: URL(fileURLWithPath: binaryPath),
+                arguments: arguments,
+                environment: environment,
+                timeout: timeout,
+                killGrace: killGrace
+            )
+        } catch let error as ChildProcessError {
+            throw Self.translate(error)
         }
         try Self.classify(result)
     }

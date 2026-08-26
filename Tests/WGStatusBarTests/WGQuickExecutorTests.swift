@@ -163,6 +163,60 @@ final class WGQuickExecutorTests: XCTestCase {
         )
     }
 
+    // MARK: - отмена задачи
+
+    func testTaskCancellationThrowsCancellationErrorAndKillsChild() async throws {
+        // Отмена задачи (shutdown демона — единственный отменяющий туннельные
+        // операции: EOF клиента её не даёт) обязана убить ребёнка и бросить
+        // CancellationError, а не висеть до op-таймаута. Зеркалит тест
+        // отмены WGShowExecutor на проводке исполнителя wg-quick.
+        let pidFile = NSTemporaryDirectory().appending("wgstatusbar-wgquick-cancel-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(atPath: pidFile) }
+        let stub = try makeStub(script: "printf '%s\\n' $$ > \(pidFile); sleep 30")
+        let executor = makeExecutor(binaryPath: stub, timeout: 30)
+
+        let task = Task.detached(priority: .medium) {
+            try await executor.runUp(name: "work-vpn")
+        }
+
+        // Замещённое окружение (PATH) стартует zsh-стаб медленнее (~0.5 c до
+        // первой строки) — отменяем строго после записи pid, а не по сну.
+        let pid = try Self.waitForPidFile(pidFile, within: 5)
+        task.cancel()
+
+        do {
+            _ = try await task.value
+            XCTFail("отменённая задача должна бросать")
+        } catch {
+            XCTAssertTrue(error is CancellationError, "ожидалась CancellationError, получено: \(error)")
+        }
+
+        XCTAssertTrue(
+            Self.waitUntilProcessDies(pid, within: 3),
+            "процесс \(pid) должен быть убит по отмене задачи"
+        )
+    }
+
+    /// Ждёт pid-файл стаба и возвращает записанный pid (стаб с замещённым
+    /// окружением стартует небыстро — слепой сон вместо ожидания флейчит).
+    private static func waitForPidFile(_ path: String, within seconds: TimeInterval) throws -> pid_t {
+        let deadline = Date().addingTimeInterval(seconds)
+        while Date() < deadline {
+            if let data = try? String(contentsOfFile: path, encoding: .utf8) {
+                let trimmed = data.trimmingCharacters(in: .whitespacesAndNewlines)
+                if let pid = Int32(trimmed), pid > 0 {
+                    return pid
+                }
+            }
+            Thread.sleep(forTimeInterval: 0.05)
+        }
+        throw NSError(
+            domain: "WGQuickExecutorTests",
+            code: 1,
+            userInfo: [NSLocalizedDescriptionKey: "стаб не записал pid в \(path) за \(seconds) с"]
+        )
+    }
+
     // MARK: - резолв
 
     func testResolverMissThrowsQuickMissingWithoutLaunchingProcess() async throws {

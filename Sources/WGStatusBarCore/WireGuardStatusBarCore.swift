@@ -460,9 +460,11 @@ public final class WireGuardStatusModel: ObservableObject {
     /// вовсе; данные сойдёт следующий 5-с тик (прецедент: провал установки
     /// сервиса — one-tick error без refresh).
     public func toggleTunnel(named name: String) {
-        // Одна операция по имени за раз: повторный клик (меню успело
-        // пересобраться) не плодит параллельные up/down одного туннеля.
-        guard !inFlightTunnels.contains(name) else { return }
+        // Одна операция за раз — не только по имени: бюджет худшего случая
+        // очереди демона (show 4 c + операция 9 c, закреплён тестом) верен
+        // ровно для одной операции; клик до того, как строки ушли в disabled
+        // (ре-ренд SwiftUI асинхронен), — молчаливый no-op.
+        guard inFlightTunnels.isEmpty else { return }
         let shouldTearDown = isTunnelUp(named: name)
         inFlightTunnels.insert(name)
         let client = tunnelCommandRunner
