@@ -62,11 +62,11 @@
 - [x] полный сьют зелёный
 
 ### Task 4: Клиент — `TunnelState` и `state()`
-- [ ] `TunnelState { name: String, isUp: Bool, utun: String? }` (Model.swift, рядом с `TunnelInfo`)
-- [ ] `TunnelCommandRunning` += `state() async throws -> [TunnelState]` (модель пока остаётся на `list()` — переключение в Task 5, каждая задача зелёная); `SocketTunnelClient.state()`: тот же транспорт/сверка версий/маппинг ошибок, что у `list()`; парсинг: split по `\n`, каждая строка split по `\t` с `omittingEmptySubsequences: false` (дефолтный split съедает пустое третье поле down-строк) — ровно 3 поля, `up` требует непустой utun, `down` — пустой; мусорная строка payload → `.badResponse`
-- [ ] оба мока `TunnelCommandRunning` расширяются `state()`: `MockTunnelClient` (WGStatusBarTests, программируемый `stateResults` + счётчики) и `GatedTunnelClient` (StatusItemControllerTests.swift:162, тривиальный возврат `[]`)
-- [ ] тесты `SocketTunnelClientTests`: state happy path (up с utun, down без) против реального `DaemonServer`; пустой набор конфигов → пустой ok-payload → `[]`; мусорный payload → `.badResponse`; старый build демона → `daemonOutdated`; отказ соединения
-- [ ] полный сьют зелёный
+- [x] `TunnelState { name: String, isUp: Bool, utun: String? }` (Model.swift, рядом с `TunnelInfo`)
+- [x] `TunnelCommandRunning` += `state() async throws -> [TunnelState]` (модель пока остаётся на `list()` — переключение в Task 5, каждая задача зелёная); `SocketTunnelClient.state()`: тот же транспорт/сверка версий/маппинг ошибок, что у `list()`; парсинг: split по `\n`, каждая строка split по `\t` с `omittingEmptySubsequences: false` (дефолтный split съедает пустое третье поле down-строк) — ровно 3 поля, `up` требует непустой utun, `down` — пустой; мусорная строка payload → `.badResponse`
+- [x] оба мока `TunnelCommandRunning` расширяются `state()`: `MockTunnelClient` (WGStatusBarTests, программируемый `stateResults` + счётчики) и `GatedTunnelClient` (StatusItemControllerTests.swift:162, тривиальный возврат `[]`)
+- [x] тесты `SocketTunnelClientTests`: state happy path (up с utun, down без) против реального `DaemonServer`; пустой набор конфигов → пустой ok-payload → `[]`; мусорный payload → `.badResponse`; старый build демона → `daemonOutdated`; отказ соединения
+- [x] полный сьют зелёный
 
 ### Task 5: Модель — isUp из state, displayName из state, направление toggle
 - [ ] `loadTunnels()` зовёт `state()`: `tunnels` строится напрямую из ответа (`TunnelInfo(name:isUp:)`); `isTunnelUp(named:)` через displayName **удаляется**; направление `toggleTunnel` — из `tunnels`; после ответа up/down — `state()` вместо `list()`

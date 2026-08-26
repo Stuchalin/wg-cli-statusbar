@@ -74,6 +74,46 @@ final class SocketTunnelClientTests: XCTestCase {
         )
     }
 
+    /// Псевдокаталог `/var/run/wireguard` для запроса `state` (по образцу
+    /// HelperDaemonTests): пары «конфиг → utun» с одним штампом времени —
+    /// |Δmtime| = 0 < 2 c, правило свежести ридера проходит.
+    private final class StubRuntimeFileSystem: WireGuardTunnelNameFileSystem {
+        private let lock = NSLock()
+        private var files: [String: (contents: String, modificationDate: Date)] = [:]
+
+        func addPair(config: String, interface: String) {
+            let stamp = Date()
+            lock.withLock {
+                files[config + ".name"] = (interface, stamp)
+                files[interface + ".sock"] = ("", stamp)
+            }
+        }
+
+        private func file(at path: String) -> (contents: String, modificationDate: Date)? {
+            lock.withLock { files[(path as NSString).lastPathComponent] }
+        }
+
+        func entries(inDirectory path: String) -> [String] {
+            lock.withLock { Array(files.keys) }
+        }
+
+        func contents(ofFile path: String) -> String? {
+            file(at: path)?.contents
+        }
+
+        func fileExists(atPath path: String) -> Bool {
+            file(at: path) != nil
+        }
+
+        func modificationDate(ofFile path: String) -> Date? {
+            file(at: path)?.modificationDate
+        }
+    }
+
+    private func makeRuntimeReader(_ fileSystem: WireGuardTunnelNameFileSystem) -> WireGuardRuntimeReader {
+        WireGuardRuntimeReader(fileSystem: fileSystem)
+    }
+
     /// Вызов туннельного исполнителя для ассертов (кортежи не Equatable).
     private struct TunnelCall: Equatable {
         let command: String
@@ -123,17 +163,20 @@ final class SocketTunnelClientTests: XCTestCase {
 
     /// Поднимает `DaemonServer` и ждёт настоящего listen-состояния: файл сокета
     /// появляется на bind — раньше listen, и connect в этом окне ловит
-    /// ECONNREFUSED (флейк).
+    /// ECONNREFUSED (флейк). Ридер по умолчанию — на пустом псевдокаталоге
+    /// `/var/run/wireguard`: настоящая машина не должна протекать в тесты.
     private func startServer(
         socketPath: String,
         configStore: TunnelConfigStore,
-        tunnelExecutor: WGQuickExecuting
+        tunnelExecutor: WGQuickExecuting,
+        runtimeReader: WireGuardRuntimeReader? = nil
     ) async throws {
         let server = DaemonServer(
             executor: StubShowExecutor(),
             socketPath: socketPath,
             configStore: configStore,
-            tunnelExecutor: tunnelExecutor
+            tunnelExecutor: tunnelExecutor,
+            runtimeReader: runtimeReader ?? makeRuntimeReader(StubRuntimeFileSystem())
         )
         serverTask = Task.detached { try await server.run() }
         try waitUntilListening(socketPath: socketPath)
@@ -331,6 +374,88 @@ final class SocketTunnelClientTests: XCTestCase {
         )
     }
 
+    // MARK: - state → состояние туннелей
+
+    func testStateReturnsUpWithUunAndDownWithoutFromDaemon() async throws {
+        // kvmka-full без пары ридера (туннель опущен) — down с nil-utun:
+        // клиент не выводит состояние сам, он разбирает трёхполевые строки
+        // демона. Полный round-trip: сокет → DaemonServer → стор × ридер.
+        let runtime = StubRuntimeFileSystem()
+        runtime.addPair(config: "kvmka-ai", interface: "utun2")
+        let socketPath = makeSocketPath()
+        try await startServer(
+            socketPath: socketPath,
+            configStore: makeConfigStore(names: ["kvmka-ai", "kvmka-full"]),
+            tunnelExecutor: StubTunnelExecutor(),
+            runtimeReader: makeRuntimeReader(runtime)
+        )
+
+        let client = SocketTunnelClient(socketPath: socketPath)
+        let states = try await client.state()
+
+        XCTAssertEqual(
+            states,
+            [
+                TunnelState(name: "kvmka-ai", isUp: true, utun: "utun2"),
+                TunnelState(name: "kvmka-full", isUp: false, utun: nil),
+            ],
+            "up несёт utun из пары ридера, down — без него"
+        )
+    }
+
+    func testStateEmptyConfigSetReturnsEmptyArray() async throws {
+        let socketPath = makeSocketPath()
+        try await startServer(
+            socketPath: socketPath,
+            configStore: makeConfigStore(names: []),
+            tunnelExecutor: StubTunnelExecutor()
+        )
+
+        let client = SocketTunnelClient(socketPath: socketPath)
+        let states = try await client.state()
+
+        XCTAssertEqual(states, [], "пустой ok-payload — пустой набор, не ошибка")
+    }
+
+    func testStateGarbagePayloadLinesMapToBadResponse() async throws {
+        // Одна мусорная строка портит весь ответ: полуразобранное состояние
+        // хуже честного badResponse. Живой демон строки не искажает — это
+        // защита от дрейфа формата (как усечённый дамп у show).
+        let payloads = [
+            "kvmka-ai\n",  // формат list — одно поле
+            "kvmka-ai\tdown\n",  // два поля
+            "kvmka-ai\tup\tutun2\textra\n",  // четыре поля
+            "kvmka-ai\tup\t\n",  // up без utun
+            "kvmka-ai\tdown\tutun2\n",  // down с utun
+            "kvmka-ai\tsideways\tutun2\n",  // чужое слово состояния
+            "\tup\tutun2\n",  // пустое имя
+            "kvmka-ai\tup\tutun2\ngarbage\n",  // мусор после валидной строки
+        ]
+        for payload in payloads {
+            let socketPath = makeSocketPath()
+            try serveOneConnection(
+                path: socketPath,
+                response: "ok \(helperProtocolVersion) \(helperBuildNumber)\n\(payload)"
+            )
+            let client = SocketTunnelClient(socketPath: socketPath)
+            await assertThrowsStatusFailure(.badResponse) { try await client.state() }
+        }
+    }
+
+    func testStateOldDaemonBuildMapsToDaemonOutdated() async throws {
+        // Демон до появления state: старый build в ok-заголовке обязан
+        // бить парсинг payload — иначе state читался бы у бинаря, который
+        // команду ещё не знает (его ответ — err unknown command).
+        let socketPath = makeSocketPath()
+        try serveOneConnection(
+            path: socketPath,
+            response: "ok \(helperProtocolVersion) \(helperBuildNumber - 1)\nkvmka-ai\tup\tutun2\n"
+        )
+
+        let client = SocketTunnelClient(socketPath: socketPath)
+        await assertThrowsStatusFailure(.daemonOutdated) { try await client.state() }
+    }
+
     // MARK: - err-ответы → локализованные .generic
 
     func testUpUnknownNameMapsToLocalizedTunnelNotFound() async throws {
@@ -445,6 +570,7 @@ final class SocketTunnelClientTests: XCTestCase {
         try makeStaleSocketFile(path: stalePath)
         let staleClient = SocketTunnelClient(socketPath: stalePath)
         await assertThrowsStatusFailure(.connectionRefused) { try await staleClient.list() }
+        await assertThrowsStatusFailure(.connectionRefused) { try await staleClient.state() }
         await assertThrowsStatusFailure(.connectionRefused) { try await staleClient.up("kvmka-ai") }
 
         // Пути нет вовсе — демона не устанавливали.

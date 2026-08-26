@@ -165,6 +165,8 @@ final class StatusItemControllerTests: XCTestCase {
 
         func list() async throws -> [String] { [] }
 
+        func state() async throws -> [TunnelState] { [] }
+
         func up(_ name: String) async throws {
             await withCheckedContinuation { continuation in
                 lock.withLock { self.continuation = continuation }

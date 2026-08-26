@@ -70,3 +70,20 @@ public struct TunnelInfo: Equatable {
         self.isUp = isUp
     }
 }
+
+/// Строка состояния туннеля из запроса `state` демона. В отличие от
+/// `TunnelInfo`, и `isUp`, и интерфейс — данные демона, а не вывод модели:
+/// `/var/run/wireguard` читаем только root, приложение состояние из дампа
+/// не выводит. `utun` заполнен только у поднятого туннеля.
+public struct TunnelState: Equatable {
+    public let name: String
+    public let isUp: Bool
+    /// Имя интерфейса поднятом туннеля (`utun2`); у опущенного — `nil`.
+    public let utun: String?
+
+    public init(name: String, isUp: Bool, utun: String?) {
+        self.name = name
+        self.isUp = isUp
+        self.utun = utun
+    }
+}

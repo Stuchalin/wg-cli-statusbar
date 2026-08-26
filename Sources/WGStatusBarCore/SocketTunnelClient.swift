@@ -1,20 +1,22 @@
 import Foundation
 
 /// Клиент туннельных операций демона: `list` → имена конфигов wg-quick,
-/// `up`/`down` → управление туннелем. Транспорт — общий `HelperClient`;
-/// интерпретация своя: общая часть (decode + сверка версий заголовка — старый
-/// build или чужой протокол → `daemonOutdated` даже по `err`), а коды `err`
-/// маппятся в локализованные `.generic` — новые кейсы `StatusFailure` не
-/// вводятся (иначе сломается исчерпывающий switch в `ServiceState.derive` и
-/// его тесты). Деталь с wire не берётся: демон туннельные ошибки отправляет
-/// только с кодом, без детали (Task 4). Тишина до дедлайна — тоже
-/// `.generic(error.tunnel_op_failed)`, не `commandTimeout`: его текст — про
-/// `wg show`, чужой команде не подходит.
+/// `state` → состояние туннелей (isUp + utun — данные демона, а не вывод
+/// модели), `up`/`down` → управление туннелем. Транспорт — общий
+/// `HelperClient`; интерпретация своя: общая часть (decode + сверка версий
+/// заголовка — старый build или чужой протокол → `daemonOutdated` даже по
+/// `err`), а коды `err` маппятся в локализованные `.generic` — новые кейсы
+/// `StatusFailure` не вводятся (иначе сломается исчерпывающий switch в
+/// `ServiceState.derive` и его тесты). Деталь с wire не берётся: демон
+/// туннельные ошибки отправляет только с кодом, без детали (Task 4). Тишина
+/// до дедлайна — тоже `.generic(error.tunnel_op_failed)`, не
+/// `commandTimeout`: его текст — про `wg show`, чужой команде не подходит.
 /// Туннельные операции демона для модели; инжектится для тестов (мок со
 /// счётчиками и программируемыми результатами — по образцу
 /// `WGShowCommandRunning`).
 public protocol TunnelCommandRunning {
     func list() async throws -> [String]
+    func state() async throws -> [TunnelState]
     func up(_ name: String) async throws
     func down(_ name: String) async throws
 }
@@ -45,6 +47,34 @@ public struct SocketTunnelClient {
     public func list() async throws -> [String] {
         let payload = try await exchange(.list)
         return payload.split(separator: "\n").map(String.init)
+    }
+
+    /// Состояние туннелей из конфигов демона: строки payload всегда из трёх
+    /// полей через `\t` — `имя\tup\tutunN` у поднятого (utun непустой),
+    /// `имя\tdown\t` у опущенного (пустой); пустой payload — конфигов нет.
+    /// Разбор строки с `omittingEmptySubsequences: false`: дефолтный split
+    /// съедает пустое третье поле down-строк, и полей оставалось бы два.
+    /// Любая строка мимо формата (не 3 поля, пустое имя, чужое слово
+    /// состояния, up без utun или down с utun) — мусор формата →
+    /// `.badResponse`, как битый заголовок у остальных команд.
+    public func state() async throws -> [TunnelState] {
+        let payload = try await exchange(.state)
+        return try payload.split(separator: "\n").map { line in
+            let fields = line.split(separator: "\t", omittingEmptySubsequences: false).map(String.init)
+            guard fields.count == 3, !fields[0].isEmpty else {
+                throw StatusFailure.badResponse
+            }
+            switch fields[1] {
+            case "up":
+                guard !fields[2].isEmpty else { throw StatusFailure.badResponse }
+                return TunnelState(name: fields[0], isUp: true, utun: fields[2])
+            case "down":
+                guard fields[2].isEmpty else { throw StatusFailure.badResponse }
+                return TunnelState(name: fields[0], isUp: false, utun: nil)
+            default:
+                throw StatusFailure.badResponse
+            }
+        }
     }
 
     public func up(_ name: String) async throws {

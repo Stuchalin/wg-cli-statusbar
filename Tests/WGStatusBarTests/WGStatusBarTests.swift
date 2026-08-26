@@ -1280,26 +1280,31 @@ private final class MockTunnelNamer: WireGuardTunnelNaming {
 private final class MockTunnelClient: TunnelCommandRunning {
     private let lock = NSLock()
     private var listResults: [Result<[String], Error>] = []
+    private var stateResults: [Result<[TunnelState], Error>] = []
     private var opResults: [Result<Void, Error>] = []
     private var gated = false
     private var gateContinuation: CheckedContinuation<Void, Never>?
     private var listCallsStorage = 0
+    private var stateCallsStorage = 0
     private var upCallsStorage: [String] = []
     private var downCallsStorage: [String] = []
 
     func configure(
         listResults: [Result<[String], Error>] = [],
+        stateResults: [Result<[TunnelState], Error>] = [],
         opResults: [Result<Void, Error>] = [],
         gate: Bool = false
     ) {
         lock.withLock {
             self.listResults = listResults
+            self.stateResults = stateResults
             self.opResults = opResults
             self.gated = gate
         }
     }
 
     var listCalls: Int { lock.withLock { listCallsStorage } }
+    var stateCalls: Int { lock.withLock { stateCallsStorage } }
     var upCalls: [String] { lock.withLock { upCallsStorage } }
     var downCalls: [String] { lock.withLock { downCallsStorage } }
 
@@ -1319,6 +1324,19 @@ private final class MockTunnelClient: TunnelCommandRunning {
         switch result {
         case .success(let names):
             return names
+        case .failure(let error):
+            throw error
+        }
+    }
+
+    func state() async throws -> [TunnelState] {
+        let result: Result<[TunnelState], Error> = lock.withLock {
+            stateCallsStorage += 1
+            return stateResults.isEmpty ? .success([]) : stateResults.removeFirst()
+        }
+        switch result {
+        case .success(let states):
+            return states
         case .failure(let error):
             throw error
         }
