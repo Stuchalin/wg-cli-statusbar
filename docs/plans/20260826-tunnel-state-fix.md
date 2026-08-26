@@ -81,10 +81,10 @@
 - [x] полный сьют зелёный
 
 ### Task 6: Verify acceptance criteria
-- [ ] проверить по коду все требования Overview (isUp только из state, направление toggle, displayName-приоритет демона, list не тронут)
-- [ ] полный сьют + `swift build -c release`
-- [ ] grep-гейты (скоуп `Sources/` + `Tests/`): `isTunnelUp` не осталось; `helperBuildNumber = 17`; `state` в encode/маршрутизации/клиенте/модели
-- [ ] код-ревью диффа ветки (корректность, совместимость старого приложения с демоном 17)
+- [x] проверить по коду все требования Overview (isUp только из state, направление toggle, displayName-приоритет демона, list не тронут)
+- [x] полный сьют + `swift build -c release`
+- [x] grep-гейты (скоуп `Sources/` + `Tests/`): `isTunnelUp` не осталось; `helperBuildNumber = 17`; `state` в encode/маршрутизации/клиенте/модели
+- [x] код-ревью диффа ветки (корректность, совместимость старого приложения с демоном 17)
 
 ### Task 7: [Final] Update documentation
 - [ ] CLAUDE.md: запрос `state` в протоколе (формат трёхполевых строк), `WireGuardRuntimeReader` в архитектуре (namer поверх ридера; демон — источник состояния и имён в daemon-режиме), data flow (`loadTunnels` через state, приоритет displayName, namer — фолбэк), секция тестов — новые файлы
