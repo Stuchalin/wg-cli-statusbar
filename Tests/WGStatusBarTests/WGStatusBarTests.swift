@@ -652,6 +652,105 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(model.lastError, "boom")
     }
 
+    // MARK: - Модель: каталог конфигов (Open Configs ⌘O)
+
+    /// Поддельная FS для выбора каталога конфигов (та же абстракция, что у
+    /// `TunnelConfigStore`): множество «существующих» директорий + листинги.
+    /// Отсутствующего ключа в `entriesByDirectory` хватает для листинга `nil`
+    /// (каталог есть, но не читается).
+    private final class ConfigFolderFileSystem: TunnelConfigFileSystem {
+        var directories: Set<String> = []
+        var entriesByDirectory: [String: [String]] = [:]
+
+        func contentsOfDirectory(atPath path: String) -> [String]? {
+            entriesByDirectory[path]
+        }
+
+        func isDirectory(atPath path: String) -> Bool {
+            directories.contains(path)
+        }
+    }
+
+    func testConfigFolderPrefersRootActuallyCarryingConfigs() {
+        // Машина на Apple Silicon: пустой `/etc/wireguard` с более высоким
+        // приоритетом не должен выигрывать у `/opt/homebrew/etc/wireguard`,
+        // откуда меню берёт туннели.
+        let fs = ConfigFolderFileSystem()
+        fs.directories = ["/etc/wireguard", "/opt/homebrew/etc/wireguard"]
+        fs.entriesByDirectory = ["/opt/homebrew/etc/wireguard": ["kvmka-ai.conf"]]
+
+        let path = WireGuardStatusModel.configFolderPath(
+            searchPaths: tunnelConfigSearchPaths,
+            legacyFallback: "/Users/test/Library/Application Support/wireguard",
+            fileSystem: fs
+        )
+
+        XCTAssertEqual(path, "/opt/homebrew/etc/wireguard")
+    }
+
+    func testConfigFolderKeepsPriorityOrderWhenSeveralRootsCarryConfigs() {
+        // Конфиги в нескольких корнях — побеждает первый по порядку поиска
+        // (тот же порядок, по которому wg-quick резолвит конфиг).
+        let fs = ConfigFolderFileSystem()
+        fs.directories = ["/etc/wireguard", "/opt/homebrew/etc/wireguard"]
+        fs.entriesByDirectory = [
+            "/etc/wireguard": ["work.conf"],
+            "/opt/homebrew/etc/wireguard": ["kvmka-ai.conf"],
+        ]
+
+        let path = WireGuardStatusModel.configFolderPath(
+            searchPaths: tunnelConfigSearchPaths,
+            legacyFallback: "/Users/test/Library/Application Support/wireguard",
+            fileSystem: fs
+        )
+
+        XCTAssertEqual(path, "/etc/wireguard")
+    }
+
+    func testConfigFolderFallsBackToFirstExistingRootWithoutConfigs() {
+        // Ни одного `.conf`: открываем первый существующий корень с нечитаемым
+        // листингом (nil) — как пустой, так и нечитаемый каталог не претендует
+        // на роль «папки с конфигами», но остаётся fallback'ом.
+        let fs = ConfigFolderFileSystem()
+        fs.directories = ["/opt/homebrew/etc/wireguard"]
+
+        let path = WireGuardStatusModel.configFolderPath(
+            searchPaths: tunnelConfigSearchPaths,
+            legacyFallback: "/Users/test/Library/Application Support/wireguard",
+            fileSystem: fs
+        )
+
+        XCTAssertEqual(path, "/opt/homebrew/etc/wireguard")
+    }
+
+    func testConfigFolderFallsBackToLegacyAppSupportFolder() {
+        // Ни один корень демона не существует — легаси-папка приложения
+        // WireGuard (поведение до управления туннелями) не потеряна.
+        let legacy = "/Users/test/Library/Application Support/wireguard"
+        let fs = ConfigFolderFileSystem()
+        fs.directories = [legacy]
+
+        let path = WireGuardStatusModel.configFolderPath(
+            searchPaths: tunnelConfigSearchPaths,
+            legacyFallback: legacy,
+            fileSystem: fs
+        )
+
+        XCTAssertEqual(path, legacy)
+    }
+
+    func testConfigFolderReturnsNilWhenNothingExists() {
+        let fs = ConfigFolderFileSystem()
+
+        let path = WireGuardStatusModel.configFolderPath(
+            searchPaths: tunnelConfigSearchPaths,
+            legacyFallback: "/Users/test/Library/Application Support/wireguard",
+            fileSystem: fs
+        )
+
+        XCTAssertNil(path)
+    }
+
     // MARK: - Модель: туннели (list/up/down)
 
     /// Реальный DaemonServer на tmp-сокете — единственный способ довести

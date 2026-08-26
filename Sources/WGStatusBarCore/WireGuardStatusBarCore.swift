@@ -390,23 +390,50 @@ public final class WireGuardStatusModel: ObservableObject {
         return resolved
     }
 
-    public func openWireGuardConfigFolder() {
-        let candidateFolders: [URL] = [
-            URL(fileURLWithPath: "/usr/local/etc/wireguard"),
-            URL(fileURLWithPath: "/etc/wireguard"),
-            FileManager.default.homeDirectoryForCurrentUser
-                .appendingPathComponent("Library")
-                .appendingPathComponent("Application Support")
-                .appendingPathComponent("wireguard")
-        ]
-
-        for path in candidateFolders {
-            if FileManager.default.fileExists(atPath: path.path) {
-                NSWorkspace.shared.open(path)
-                return
+    /// Каталог для «Open Configs ⌘O»: те же корни, из которых демон собирает
+    /// туннели (`tunnelConfigSearchPaths`) — иначе меню листировало бы туннели
+    /// из `/opt/homebrew/etc/wireguard`, а открывался «not found». Побеждает
+    /// первый корень, где реально лежит `*.conf` (пустой корень с более высоким
+    /// приоритетом не должен выигрывать у папки, откуда растут туннели меню),
+    /// иначе первый существующий корень, иначе легаси-папка приложения
+    /// WireGuard. nil — не нашли ничего.
+    static func configFolderPath(
+        searchPaths: [String],
+        legacyFallback: String,
+        fileSystem: TunnelConfigFileSystem
+    ) -> String? {
+        var firstExisting: String?
+        for path in searchPaths {
+            guard fileSystem.isDirectory(atPath: path) else { continue }
+            if firstExisting == nil { firstExisting = path }
+            let entries = fileSystem.contentsOfDirectory(atPath: path) ?? []
+            if entries.contains(where: { $0.hasSuffix(".conf") }) {
+                return path
             }
         }
-        lastFailure = .generic(L10n.string("error.config_folder_not_found"))
+        if let firstExisting { return firstExisting }
+        return fileSystem.isDirectory(atPath: legacyFallback) ? legacyFallback : nil
+    }
+
+    public func openWireGuardConfigFolder() {
+        let legacyFallback = FileManager.default.homeDirectoryForCurrentUser
+            .appendingPathComponent("Library")
+            .appendingPathComponent("Application Support")
+            .appendingPathComponent("wireguard")
+            .path
+
+        guard
+            let path = Self.configFolderPath(
+                searchPaths: tunnelConfigSearchPaths,
+                legacyFallback: legacyFallback,
+                fileSystem: FileManagerTunnelConfigFileSystem()
+            )
+        else {
+            lastFailure = .generic(L10n.string("error.config_folder_not_found"))
+            return
+        }
+
+        NSWorkspace.shared.open(URL(fileURLWithPath: path))
     }
 
     /// Ошибка установки/удаления сервиса демона (stderr скрипта или сбой
