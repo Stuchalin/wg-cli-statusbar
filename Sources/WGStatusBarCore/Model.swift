@@ -10,11 +10,6 @@ public struct WGInterface: Identifiable, Equatable {
     public var displayName: String
     public var peers: [WGPeer]
 
-    /// Подключён, если хоть один пир активен (хендшейк fresh|aging).
-    public var isConnected: Bool {
-        peers.contains { $0.isActive }
-    }
-
     public init(name: String, peers: [WGPeer], displayName: String? = nil) {
         self.id = name
         self.name = name
@@ -49,11 +44,6 @@ public struct WGPeer: Identifiable, Equatable {
         self.latestHandshake = latestHandshake
         self.rxBytes = rxBytes
         self.txBytes = txBytes
-    }
-
-    /// Пир активен, пока хендшейк свежий или стареющий (green|orange).
-    public var isActive: Bool {
-        HandshakeFreshness.freshness(date: latestHandshake).isActive
     }
 }
 

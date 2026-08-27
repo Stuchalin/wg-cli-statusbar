@@ -79,13 +79,13 @@
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 - Modify: `Tests/WGStatusBarTests/HandshakeFreshnessTests.swift`
 
-- [ ] `WireGuardStatusBarCore.swift`: `showsConnected` (:304) → `showsTunnelUp` = `!interfaces.isEmpty && !isDataStale`; doc-комментарий — иконка отражает факт поднятого туннеля, хендшейки живут в карточке, устаревший снапшот щиток не зажигает; `menuTitle` (:325) читает новое имя, тексты «wg: on/off» не меняются
-- [ ] Удалить мёртвую цепочку: `isAnyConnected` (:282), `WGInterface.isConnected` (Model.swift:14), `WGPeer.isActive` (Model.swift:55), `HandshakeFreshness.isActive` (HandshakeFreshness.swift:20) вместе с их doc-комментариями
-- [ ] `StatusItemController.swift`: `iconConnected(for:)` (:307) переименовать в пару к новому свойству (`iconUp(for:)`), поправить doc-комментарий (:306)
-- [ ] Тесты WGStatusBarTests — новая семантика: переписать кейсы :207–213, :224, :233, :280, :460, :479, :500, :526, :534, :543–544, :562–569, :586–592, :1112 на «on = интерфейс есть + данные свежие»; добавить регрессионный кейс жалобы: интерфейс есть, все хендшейки stale/never → щиток горит; «off» = интерфейсов нет / данные устарели
-- [ ] Тесты — удалить кейсы мёртвого кода: `WGPeer.isActive` (`testPeerActivityUsesHandshakeFreshness` :166–170), `isConnected` (`testInterfaceConnectedWhenAnyPeerActive` :172–176), `isAnyConnected` (:211–213, :501, :543), инвариант `showsConnected == isAnyConnected` (:459), `HandshakeFreshness.isActive` (HandshakeFreshnessTests :45–61); MARK :164 («активность через HandshakeFreshness») убрать вместе с тестом, MARK :178 переформулировать без `isAnyConnected`
-- [ ] Grep-свит doc-комментариев в Sources/ по `showsConnected`/`iconConnected`/«подключён»: doc `iconConnected` (:306), `updateStatusIcon` (:296 — «заливка = подключён» → туннель-семантика); прочие упоминания найдёт свит
-- [ ] Гейт: `swift build` + `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный полный сьют
+- [x] `WireGuardStatusBarCore.swift`: `showsConnected` (:304) → `showsTunnelUp` = `!interfaces.isEmpty && !isDataStale`; doc-комментарий — иконка отражает факт поднятого туннеля, хендшейки живут в карточке, устаревший снапшот щиток не зажигает; `menuTitle` (:325) читает новое имя, тексты «wg: on/off» не меняются
+- [x] Удалить мёртвую цепочку: `isAnyConnected` (:282), `WGInterface.isConnected` (Model.swift:14), `WGPeer.isActive` (Model.swift:55), `HandshakeFreshness.isActive` (HandshakeFreshness.swift:20) вместе с их doc-комментариями
+- [x] `StatusItemController.swift`: `iconConnected(for:)` (:307) переименовать в пару к новому свойству (`iconUp(for:)`), поправить doc-комментарий (:306)
+- [x] Тесты WGStatusBarTests — новая семантика: переписать кейсы :207–213, :224, :233, :280, :460, :479, :500, :526, :534, :543–544, :562–569, :586–592, :1112 на «on = интерфейс есть + данные свежие»; добавить регрессионный кейс жалобы: интерфейс есть, все хендшейки stale/never → щиток горит; «off» = интерфейсов нет / данные устарели
+- [x] Тесты — удалить кейсы мёртвого кода: `WGPeer.isActive` (`testPeerActivityUsesHandshakeFreshness` :166–170), `isConnected` (`testInterfaceConnectedWhenAnyPeerActive` :172–176), `isAnyConnected` (:211–213, :501, :543), инвариант `showsConnected == isAnyConnected` (:459), `HandshakeFreshness.isActive` (HandshakeFreshnessTests :45–61); MARK :164 («активность через HandshakeFreshness») убрать вместе с тестом, MARK :178 переформулировать без `isAnyConnected`
+- [x] Grep-свит doc-комментариев в Sources/ по `showsConnected`/`iconConnected`/«подключён»: doc `iconConnected` (:306), `updateStatusIcon` (:296 — «заливка = подключён» → туннель-семантика); прочие упоминания найдёт свит
+- [x] Гейт: `swift build` + `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный полный сьют
 
 ### Task 2: Опрос `state` каждые 5 секунд
 

@@ -277,12 +277,6 @@ public final class WireGuardStatusModel: ObservableObject {
         timer?.invalidate()
     }
 
-    /// Хотя бы один интерфейс подключён — правда по данным, безотносительно
-    /// свежести снапшота.
-    public var isAnyConnected: Bool {
-        interfaces.contains(where: \.isConnected)
-    }
-
     /// Данные устарели: снапшот непуст и последнему успешному тику прошло
     /// больше `stalenessLimit` (или успешных тиков не было — в продакшене
     /// недостижимо, `interfaces` пишет только успешный тик). Пустые данные —
@@ -299,10 +293,14 @@ public final class WireGuardStatusModel: ObservableObject {
         return now().timeIntervalSince(lastSuccessAt) > stalenessLimit
     }
 
-    /// Состояние иконки/VoiceOver: подключён И данные не устарели — замороженный
-    /// снапшот при потере источника не должен показывать «живой» щиток.
-    public var showsConnected: Bool {
-        isAnyConnected && !isDataStale
+    /// Состояние иконки/VoiceOver: туннель поднят (в ядре есть wg-интерфейс,
+    /// дамп непуст) И данные не устарели. Хендшейки и их свежесть — атрибут
+    /// карточки, щиток от них не зависит (поднятый туннель без трафика не
+    /// гаснет); замороженный снапшот при потере источника щиток не зажигает.
+    /// Проверка непустоты обязательна: пустой дамп «нечему устаревать»
+    /// (`isDataStale == false`) — без неё пустой дамп зажигал бы щиток.
+    public var showsTunnelUp: Bool {
+        !interfaces.isEmpty && !isDataStale
     }
 
     /// Строка ошибки для карточки, вычисляется из `lastFailure`; тип `String?`
@@ -320,10 +318,10 @@ public final class WireGuardStatusModel: ObservableObject {
         error as? StatusFailure ?? .generic(error.localizedDescription)
     }
 
-    /// Тайтл для VoiceOver: как и иконка, от `showsConnected` — устаревший
-    /// снапшот не озвучивается как «подключено».
+    /// Тайтл для VoiceOver: как и иконка, от `showsTunnelUp` — устаревший
+    /// снапшот не озвучивается как «туннель поднят».
     public var menuTitle: String {
-        showsConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
+        showsTunnelUp ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);

@@ -293,19 +293,20 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         currentServiceState != previousServiceState && isMenuOpen
     }
 
-    /// Иконка в бар: заливка = подключён, контур = нет (ошибка wg или устаревший
-    /// снапшот = Off, детали — в карточке). Template-режим сам выбирает цвет
-    /// под тему.
+    /// Иконка в бар: заливка = туннель поднят, контур = нет (все туннели
+    /// опущены, ошибка wg или устаревший снапшот = Off, детали — в карточке).
+    /// Template-режим сам выбирает цвет под тему.
     private func updateStatusIcon() {
-        statusItem.button?.image = StatusIcon.image(connected: Self.iconConnected(for: model))
+        statusItem.button?.image = StatusIcon.image(connected: Self.iconUp(for: model))
         statusItem.button?.setAccessibilityLabel(model.menuTitle)
     }
 
     /// Решение иконки из модели — статически, чтобы тестировать без создания
-    /// `NSStatusItem` (как `performStatusAction`): иконка следует свежести
-    /// снапшота (`showsConnected`), замороженные данные щиток не зажигают.
-    static func iconConnected(for model: WireGuardStatusModel) -> Bool {
-        model.showsConnected
+    /// `NSStatusItem` (как `performStatusAction`): щиток отражает факт
+    /// поднятого туннеля (`showsTunnelUp`), замороженные данные щиток
+    /// не зажигают.
+    static func iconUp(for model: WireGuardStatusModel) -> Bool {
+        model.showsTunnelUp
     }
 
     /// Загруженность меняется и при открытом меню (тик обновления работает
