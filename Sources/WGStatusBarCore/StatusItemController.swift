@@ -189,7 +189,7 @@ enum StatusMenuFactory {
 ///
 /// Меню пересобирается в `menuNeedsUpdate` — при каждом открытии данные свежие
 /// (включая `loadTunnels()`); изменение `tunnels` при открытом меню
-/// пересобирает секцию (list асинхронный). Контент карточки обновляется сам
+/// пересобирает секцию (ответ `state` асинхронный). Контент карточки обновляется сам
 /// (`@ObservedObject` модели), контроллер реагирует на `objectWillChange`
 /// иконкой, состоянием пункта «Обновить», пунктом сервиса
 /// (установить/обновить/удалить) и перемером высоты карточки.
@@ -205,7 +205,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     private let installer: ServiceInstalling
     private let statusItem: NSStatusItem
     private var cancellable: AnyCancellable?
-    /// Ответ `list` асинхронный: к моменту первой сборки меню список туннелей
+    /// Ответ `state` асинхронный: к моменту первой сборки меню список туннелей
     /// ещё пуст — его прибытие пересобирает секцию в открытом меню.
     private var tunnelsCancellable: AnyCancellable?
     /// Меню сейчас открыто (`menuNeedsUpdate`…`menuDidClose`): пересборка по
@@ -245,7 +245,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
             .receive(on: DispatchQueue.main)
             .sink { [weak self] _ in self?.modelDidChange() }
         // Отдельная подписка на `tunnels` (публикуется только по факту
-        // изменения — list/recompute, не каждый тик): прибытие списка или
+        // изменения — ответ `state`, не каждый тик): прибытие списка или
         // переворот isUp пересобирает секцию, пока меню открыто.
         tunnelsCancellable = model.$tunnels
             .receive(on: DispatchQueue.main)
@@ -344,7 +344,7 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     public func menuNeedsUpdate(_ menu: NSMenu) {
         isMenuOpen = true
-        // Список туннелей тянется при каждом открытии (list асинхронный —
+        // Состояние туннелей тянется при каждом открытии (state асинхронный —
         // ответ пересоберёт секцию по подписке, если придёт после сборки).
         model.loadTunnels()
         rebuildMenu()
@@ -356,9 +356,10 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     // MARK: - Сборка меню
 
-    /// Список туннелей пришёл (или пересчитался isUp) — пересобираем меню,
-    /// пока оно открыто: иначе при первом открытии секция появилась бы только
-    /// со второго раза. Закрытое меню соберётся свежим при следующем открытии.
+    /// Ответ `state` пришёл (список или чей-то isUp изменился) — пересобираем
+    /// меню, пока оно открыто: иначе при первом открытии секция появилась бы
+    /// только со второго раза. Закрытое меню соберётся свежим при следующем
+    /// открытии.
     private func tunnelsDidChange() {
         guard isMenuOpen else { return }
         rebuildMenu()

@@ -774,11 +774,13 @@ final class WGStatusBarTests: XCTestCase {
 
     /// Модель + поднятый DaemonServer со стабильным show-исполнителем и моком
     /// туннельного клиента; на выходе модель уже в `.installed` с одним
-    /// отработанным тиком.
+    /// отработанным тиком. Часы инжектятся тестами устарелости посреди
+    /// туннельной операции.
     private func makeInstalledModel(
         showExecutor: WGShowExecuting,
         tunnelNamer: WireGuardTunnelNaming,
-        tunnelClient: TunnelCommandRunning
+        tunnelClient: TunnelCommandRunning,
+        now: @escaping () -> Date = Date.init
     ) -> WireGuardStatusModel {
         // sun_path вмещает ~103 байта — короткий /tmp-путь с усечённым UUID.
         let socketPath = "/tmp/wgstatusbar-modeltests-"
@@ -794,6 +796,7 @@ final class WGStatusBarTests: XCTestCase {
             tunnelNamer: tunnelNamer,
             socketExists: { FileManager.default.fileExists(atPath: socketPath) },
             socketPath: socketPath,
+            now: now,
             tunnelCommandRunner: tunnelClient
         )
         model.refresh()
@@ -835,30 +838,33 @@ final class WGStatusBarTests: XCTestCase {
         dump.isEmpty ? dump : dump + "\n"
     }
 
-    /// Happy path: поднятый туннель уходит в down (направление — из
-    /// displayName-снапшота), имя стоит в inFlight ровно на время операции,
-    /// успех делает немедленный refresh — isUp переворачивается.
-    func testToggleTunnelTearsDownAndClearsInFlightOnSuccess() {
-        let clock = FakeClock()
+    /// Регрессия бага tunnel-management: `.name`-файлы `/var/run/wireguard`
+    /// читаемы только root, namer в daemon-режиме промахивается всегда —
+    /// раньше isUp выводился из displayName, поднятый туннель читался
+    /// «выключенным», и клик слал `up` (wg-quick → «already exists» →
+    /// «Tunnel operation failed»). Теперь направление — из ответа `state`:
+    /// namer-промах не влияет. Имя стоит в inFlight ровно на время операции,
+    /// успех снимает его и делает немедленный refresh.
+    func testToggleTunnelSendsDownWhenStateSaysUpDespiteNamerMiss() {
         let client = MockTunnelClient()
-        client.configure(gate: true)
-        let model = WireGuardStatusModel(
-            commandRunner: StubCommandRunner(results: [
-                .success(makeConnectedDump(interfaceName: "utun3")),
-                .success(""),  // после down: интерфейсов в дампе нет
-            ]),
-            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-ai"]),
-            socketExists: { false },
-            socketPath: helperSocketPath,
-            now: { clock.current },
-            tunnelCommandRunner: client
+        client.configure(
+            stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")])],
+            opResults: [.success(())],
+            gate: true
         )
-        model.refresh()
-        waitUntil({ !model.isLoading }, "первый refresh должен завершиться")
-        XCTAssertTrue(model.isTunnelUp(named: "kvmka-ai"), "предусловие: displayName резолвится в имя туннеля")
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            tunnelNamer: MockTunnelNamer(),  // промах: displayName остаётся utun3
+            tunnelClient: client
+        )
+        XCTAssertEqual(model.interfaces.first?.displayName, "utun3", "предусловие: namer в daemon-режиме промахивается")
+
+        model.loadTunnels()
+        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] }, "state должен заполнить tunnels")
 
         model.toggleTunnel(named: "kvmka-ai")
-        waitUntil({ !client.downCalls.isEmpty }, "поднятый туннель должен уйти в down")
+        waitUntil({ !client.downCalls.isEmpty }, "поднятый по state туннель должен уйти в down")
+        XCTAssertTrue(client.upCalls.isEmpty, "up не должен зваться — его слал баг «already exists»")
         XCTAssertEqual(model.inFlightTunnels, ["kvmka-ai"], "операция в полёте: имя в inFlightTunnels")
 
         client.releaseGate()
@@ -867,27 +873,27 @@ final class WGStatusBarTests: XCTestCase {
             "успех обязан снять имя с inFlight и сделать немедленный refresh"
         )
 
-        XCTAssertFalse(model.isTunnelUp(named: "kvmka-ai"), "успешный down + refresh переворачивают isUp")
         XCTAssertNil(model.lastFailure)
     }
 
-    /// Опущенный туннель уходит в up: направление выводится из снапшота
-    /// (интерфейса с таким displayName нет).
-    func testToggleTunnelBringsUpWhenSnapshotHasNoInterface() {
+    /// Опущенный по state туннель уходит в up — инверсия старого вывода:
+    /// namer резолвит utun3 в имя туннеля (старая модель считала бы его
+    /// поднятым и слала down), но состояние знает только демон.
+    func testToggleTunnelSendsUpWhenStateSaysDownDespiteNamerHit() {
         let client = MockTunnelClient()
-        let model = WireGuardStatusModel(
-            commandRunner: StubCommandRunner(results: [.success("")]),
-            tunnelNamer: MockTunnelNamer(),
-            socketExists: { false },
-            socketPath: helperSocketPath,
-            tunnelCommandRunner: client
+        client.configure(stateResults: [.success([TunnelState(name: "kvmka-full", isUp: false, utun: nil)])])
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-full"]),
+            tunnelClient: client
         )
-        model.refresh()
-        waitUntil({ !model.isLoading }, "refresh должен завершиться")
+
+        model.loadTunnels()
+        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-full", isUp: false)] }, "state должен заполнить tunnels")
 
         model.toggleTunnel(named: "kvmka-full")
 
-        waitUntil({ !client.upCalls.isEmpty }, "опущенный туннель должен уйти в up")
+        waitUntil({ !client.upCalls.isEmpty }, "state говорит down — должен уйти в up, снапшот не при делах")
         XCTAssertTrue(client.downCalls.isEmpty, "down не должен вызываться")
         waitUntil({ model.inFlightTunnels.isEmpty }, "операция должна завершиться и снять имя")
     }
@@ -925,13 +931,16 @@ final class WGStatusBarTests: XCTestCase {
         waitUntil({ model.inFlightTunnels.isEmpty }, "операция должна завершиться и снять имя")
     }
 
-    /// Успех операции перезаливает список (строки сходятся к снапшоту без
-    /// ожидания следующего открытия меню): loadTunnels вызывается и после
+    /// Успех операции перезаливает состояние (строки сходятся к ответу state
+    /// без ожидания следующего открытия меню): loadTunnels вызывается и после
     /// успешного up/down, не только после провала.
     func testToggleSuccessReloadsTunnelsOnInstalledDaemon() {
         let client = MockTunnelClient()
         client.configure(
-            listResults: [.success(["kvmka-ai"]), .success(["kvmka-ai"])],
+            stateResults: [
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),
+                .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),
+            ],
             opResults: [.success(())],
             gate: true
         )
@@ -943,41 +952,149 @@ final class WGStatusBarTests: XCTestCase {
         model.loadTunnels()
         waitUntil(
             { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
-            "list должен заполнить tunnels"
+            "state должен заполнить tunnels"
         )
-        XCTAssertEqual(client.listCalls, 1, "предусловие: один list на заполнение")
+        XCTAssertEqual(client.stateCalls, 1, "предусловие: один state на заполнение")
 
         model.toggleTunnel(named: "kvmka-ai")
         waitUntil({ !client.upCalls.isEmpty }, "опущенный туннель должен уйти в up")
         client.releaseGate()
         waitUntil(
-            { model.inFlightTunnels.isEmpty && client.listCalls == 2 },
-            "успех обязан перезапросить список туннелей"
+            { model.inFlightTunnels.isEmpty && client.stateCalls == 2 },
+            "успех обязан перезапросить состояние туннелей"
+        )
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "после успешного up строки читают поднятое состояние из нового state"
+        )
+    }
+
+    /// Окно между успешной операцией и ответом `state`: успех снимает имя
+    /// с inFlight синхронно, а перезалив состояния приедет позже (в
+    /// последовательной очереди демона — за show немедленного refresh).
+    /// Регресс: раньше в этом окне строка держала старую точку, и повторный
+    /// клик читал старое направление — ту же выполненную команду (up по
+    /// поднятому → «already exists», ложная ошибка операции). Теперь `ok`
+    /// демона переворачивает точку оптимистично; здесь второй state
+    /// провален (строки держат последнее известное — то самое окно).
+    func testToggleSuccessFlipsRowBeforeStateReplyArrives() {
+        let client = MockTunnelClient()
+        client.configure(
+            stateResults: [
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),
+                .failure(StatusFailure.badResponse),
+            ],
+            opResults: [.success(())]
+        )
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump("")),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "state должен заполнить tunnels"
+        )
+
+        model.toggleTunnel(named: "kvmka-ai")
+        waitUntil(
+            { model.inFlightTunnels.isEmpty && client.stateCalls == 2 },
+            "успешный up обязан завершиться и перезапросить состояние"
+        )
+
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "точка строки — уже поднята: ok демона, а не только ответ state"
+        )
+
+        model.toggleTunnel(named: "kvmka-ai")  // повторный клик в окне до нового state
+        waitUntil({ !client.downCalls.isEmpty }, "повторный клик обязан слать инверсную команду")
+        XCTAssertEqual(
+            client.upCalls,
+            ["kvmka-ai"],
+            "второго up быть не должно — окно больше не отправляет ту же команду"
+        )
+        waitUntil({ model.inFlightTunnels.isEmpty }, "вторая операция должна завершиться")
+    }
+
+    /// Догнавший опоздавший ДО-операционный state не отменяет оптимистичную
+    /// точку: последовательный демон упорядочивает отправку ответов, но
+    /// применение их моделью идёт через GCD-поток → continuation → MainActor
+    /// и может задержаться. Второй state (отправлен до up) висит на клапане,
+    /// пока операция завершается, флипает строку и запрашивает третий state;
+    /// затем второй отпускается — без latest-wins (`loadTunnelsGeneration`)
+    /// его до-операционное «down» перетёрло бы «up» после ответа операции.
+    func testDelayedPreOpStateReplyDoesNotCancelOptimisticFlip() {
+        let client = MockTunnelClient()
+        client.configure(
+            stateResults: [
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),  // 1-й: заполнение
+                .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),  // 2-й: до-операционный, зависает
+                .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),  // 3-й: после up
+            ],
+            opResults: [.success(())],
+            gateStateCall: 2
+        )
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump("")),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "первый state должен заполнить tunnels"
+        )
+
+        model.loadTunnels()  // второй state — повиснет на клапане
+        waitUntil({ client.stateCalls == 2 }, "до-операционный state должен стартовать")
+
+        model.toggleTunnel(named: "kvmka-ai")  // направление down → up
+        waitUntil(
+            { model.inFlightTunnels.isEmpty && client.stateCalls == 3 },
+            "успех обязан поставить flip и перезапросить состояние"
+        )
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "точка строки — поднята: ok демона плюс после-операционный state"
+        )
+
+        client.releaseStateGate()  // опоздавший до-операционный ответ догоняет модель
+        spinRunLoop()
+
+        XCTAssertEqual(
+            model.tunnels,
+            [TunnelInfo(name: "kvmka-ai", isUp: true)],
+            "опоздавший ответ старого запроса отбрасывается (latest-wins)"
         )
     }
 
     /// In-flight операция глушит show-тик: refresh не запускается вовсе — без
-    /// ошибки, без смены serviceState, раннер не дёргается; снапшот не
+    /// ошибки, без смены serviceState, show демона не дёргается; снапшот не
     /// устаревает, даже когда операция пережила stalenessLimit.
     func testInFlightTunnelSuppressesShowTick() {
         let clock = FakeClock()
         let client = MockTunnelClient()
-        client.configure(gate: true)
-        let runner = StubCommandRunner(results: [
-            .success(makeConnectedDump(interfaceName: "utun3")),
-            .success(""),  // должен быть израсходован только после конца операции
-        ])
-        let model = WireGuardStatusModel(
-            commandRunner: runner,
-            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-ai"]),
-            socketExists: { false },
-            socketPath: helperSocketPath,
-            now: { clock.current },
-            tunnelCommandRunner: client
+        client.configure(
+            stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")])],
+            opResults: [.success(())],
+            gate: true
         )
-        model.refresh()
-        waitUntil({ !model.isLoading }, "первый refresh должен завершиться")
-        XCTAssertEqual(runner.consumedCount, 1)
+        let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
+        let model = makeInstalledModel(
+            showExecutor: showExecutor,
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client,
+            now: { clock.current }
+        )
+        let callsAfterSetup = showExecutor.calls
+
+        model.loadTunnels()
+        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] }, "state должен заполнить tunnels")
 
         model.toggleTunnel(named: "kvmka-ai")
         waitUntil({ !client.downCalls.isEmpty }, "операция должна стартовать")
@@ -985,8 +1102,8 @@ final class WGStatusBarTests: XCTestCase {
         model.refresh()  // тик таймера (или ⌘R) посреди операции
         XCTAssertFalse(model.isLoading, "подавленный тик не должен ставить isLoading")
         XCTAssertNil(model.lastFailure, "подавленный тик не должен трогать lastFailure")
-        XCTAssertEqual(model.serviceState, .absent, "подавленный тик не должен менять serviceState")
-        XCTAssertEqual(runner.consumedCount, 1, "раннер не должен дёргаться во время операции")
+        XCTAssertEqual(model.serviceState, .installed, "подавленный тик не должен менять serviceState")
+        XCTAssertEqual(showExecutor.calls, callsAfterSetup, "show демона не должен дёргаться во время операции")
 
         // Худший случай очереди демона (13 c) переживает stalenessLimit
         // (10 c): пока операция жива, снапшот не приглушается.
@@ -996,7 +1113,7 @@ final class WGStatusBarTests: XCTestCase {
 
         client.releaseGate()
         waitUntil(
-            { runner.consumedCount == 2 && !model.isLoading },
+            { showExecutor.calls == callsAfterSetup + 1 && !model.isLoading },
             "после успеха должен пройти немедленный refresh"
         )
         XCTAssertFalse(model.isDataStale, "успешный тик снимает устарелость")
@@ -1009,9 +1126,9 @@ final class WGStatusBarTests: XCTestCase {
         let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
         let client = MockTunnelClient()
         client.configure(
-            listResults: [
-                .success(["kvmka-ai"]),
-                .failure(StatusFailure.connectionRefused),  // list после провала тоже падает — глотается
+            stateResults: [
+                .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),
+                .failure(StatusFailure.connectionRefused),  // state после провала тоже падает — глотается
             ],
             opResults: [.failure(StatusFailure.generic(L10n.string("error.tunnel_op_failed")))],
             gate: true
@@ -1022,7 +1139,7 @@ final class WGStatusBarTests: XCTestCase {
             tunnelClient: client
         )
         model.loadTunnels()
-        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] }, "list должен заполнить tunnels")
+        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] }, "state должен заполнить tunnels")
         let showCallsAfterSetup = showExecutor.calls
 
         model.toggleTunnel(named: "kvmka-ai")
@@ -1039,86 +1156,94 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(model.isLoading)
     }
 
-    /// list маппится в tunnels, isUp выводится из displayName-снапшота
-    /// (единственный источник правды — wg show, демон состояние не хранит).
-    func testLoadTunnelsMapsNamesAndDerivesIsUpFromDisplayName() {
+    /// state маппится в tunnels напрямую: имена + isUp — данные демона,
+    /// вывод из снапшота интерфейсов удалён вместе с `isTunnelUp`.
+    func testLoadTunnelsMapsStateToTunnels() {
         let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
         let client = MockTunnelClient()
-        client.configure(listResults: [.success(["kvmka-ai", "kvmka-full"])])
+        client.configure(stateResults: [.success([
+            TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3"),
+            TunnelState(name: "kvmka-full", isUp: false, utun: nil),
+        ])])
         let model = makeInstalledModel(
             showExecutor: showExecutor,
             tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-ai"]),
             tunnelClient: client
         )
-        XCTAssertEqual(model.interfaces.first?.displayName, "kvmka-ai", "предусловие: namer резолвит utun в имя конфига")
 
         model.loadTunnels()
-        waitUntil({ model.tunnels.count == 2 }, "list должен заполнить tunnels")
+        waitUntil({ model.tunnels.count == 2 }, "state должен заполнить tunnels")
 
         XCTAssertEqual(model.tunnels, [
             TunnelInfo(name: "kvmka-ai", isUp: true),
             TunnelInfo(name: "kvmka-full", isUp: false),
-        ], "isUp выводится из displayName интерфейсов, а не хранится демоном")
+        ], "isUp — данные демона, а не вывод из displayName интерфейсов")
     }
 
-    /// isUp пересчитывается при каждом обновлении interfaces: новый тик с
-    /// поднятым интерфейсом переворачивает строку без нового запроса list.
-    func testTunnelIsUpFollowsInterfaceSnapshotUpdates() {
+    /// Инверсия старого поведения: isUp строк больше не пересчитывается из
+    /// снапшота — 5-с тик с новым дампом меняет `interfaces`, но `tunnels`
+    /// держит последний ответ state, пока не придёт новый.
+    func testTunnelStatesDoNotFollowInterfaceSnapshotUpdates() {
         let showExecutor = CountingShowExecutor(dump: "")  // интерфейсов нет
         let client = MockTunnelClient()
-        client.configure(listResults: [.success(["kvmka-ai"])])
+        client.configure(stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)])])
         let model = makeInstalledModel(
             showExecutor: showExecutor,
             tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-ai"]),
             tunnelClient: client
         )
         model.loadTunnels()
-        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] }, "list должен заполнить tunnels")
+        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] }, "state должен заполнить tunnels")
 
         showExecutor.setDump(makeWireDump(makeConnectedDump(interfaceName: "utun3")))
         model.refresh()
         waitUntil({ model.interfaces.count == 1 }, "новый тик должен принести интерфейс")
 
-        XCTAssertEqual(model.tunnels, [TunnelInfo(name: "kvmka-ai", isUp: true)], "успешный тик пересчитывает isUp строк")
-        XCTAssertEqual(client.listCalls, 1, "пересчёт не должен требовать нового list")
+        XCTAssertEqual(model.tunnels, [TunnelInfo(name: "kvmka-ai", isUp: false)], "тик не переворачивает isUp без нового state")
+        XCTAssertEqual(client.stateCalls, 1, "пересчёт не требует нового state")
     }
 
-    /// Ошибки list глотаются: ни lastFailure, ни очистки tunnels — данные
-    /// меню оппортунистические.
+    /// Ошибки state глотаются: ни lastFailure, ни очистки tunnels, ни
+    /// откатывания имён интерфейсов — данные меню оппортунистические.
     func testLoadTunnelsSwallowsClientErrors() {
         let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
         let client = MockTunnelClient()
-        client.configure(listResults: [
-            .success(["kvmka-ai"]),
+        client.configure(stateResults: [
+            .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),
             .failure(StatusFailure.connectionRefused),
         ])
         let model = makeInstalledModel(
             showExecutor: showExecutor,
-            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "kvmka-ai"]),
+            tunnelNamer: MockTunnelNamer(),  // промах: имя интерфейса даёт только state
             tunnelClient: client
         )
 
         model.loadTunnels()
-        waitUntil({ model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] }, "первый list должен заполнить tunnels")
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] },
+            "первый state должен заполнить tunnels"
+        )
+        XCTAssertEqual(model.interfaces.first?.displayName, "kvmka-ai", "предусловие: имя интерфейса пришло из state")
 
         model.loadTunnels()
-        waitUntil({ client.listCalls == 2 }, "второй list должен быть отправлен")
+        waitUntil({ client.stateCalls == 2 }, "второй state должен быть отправлен")
         spinRunLoop()
 
-        XCTAssertEqual(model.tunnels, [TunnelInfo(name: "kvmka-ai", isUp: true)], "ошибка list не чистит tunnels")
-        XCTAssertNil(model.lastFailure, "ошибка list не попадает в карточку")
+        XCTAssertEqual(model.tunnels, [TunnelInfo(name: "kvmka-ai", isUp: true)], "ошибка state не чистит tunnels")
+        XCTAssertEqual(model.interfaces.first?.displayName, "kvmka-ai", "ошибка state не откатывает имя интерфейса")
+        XCTAssertNil(model.lastFailure, "ошибка state не попадает в карточку")
     }
 
-    /// Идентичный список — без republish: повторный list с теми же именами и
+    /// Идентичный ответ — без republish: повторный state с теми же именами и
     /// состояниями не должен давать новый выхлоп `$tunnels` (подписка в
     /// `StatusItemController` перестраивает открытое меню на каждый выхлоп —
     /// иначе каждое открытие меню перестраивало бы секцию дважды).
-    func testLoadTunnelsDoesNotRepublishIdenticalList() {
+    func testLoadTunnelsDoesNotRepublishIdenticalState() {
         let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
         let client = MockTunnelClient()
-        client.configure(listResults: [
-            .success(["kvmka-ai"]),
-            .success(["kvmka-ai"]),
+        client.configure(stateResults: [
+            .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),
+            .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),
         ])
         let model = makeInstalledModel(
             showExecutor: showExecutor,
@@ -1132,24 +1257,24 @@ final class WGStatusBarTests: XCTestCase {
 
         model.loadTunnels()
         waitUntil(
-            { client.listCalls == 1 && model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] },
-            "первый list должен заполнить tunnels"
+            { client.stateCalls == 1 && model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] },
+            "первый state должен заполнить tunnels"
         )
-        let emissionsAfterFirstList = emissions
+        let emissionsAfterFirstState = emissions
 
         model.loadTunnels()
-        waitUntil({ client.listCalls == 2 }, "второй list должен быть отправлен")
+        waitUntil({ client.stateCalls == 2 }, "второй state должен быть отправлен")
         spinRunLoop()
 
         XCTAssertEqual(
             emissions,
-            emissionsAfterFirstList,
-            "идентичный список — без нового выхлопа $tunnels"
+            emissionsAfterFirstState,
+            "идентичный ответ — без нового выхлопа $tunnels"
         )
     }
 
     /// До `.installed` loadTunnels не дёргает клиента вовсе: у старого демона
-    /// list — unknown command, секции быть не должно.
+    /// state — unknown command, секции быть не должно.
     func testLoadTunnelsSkipsClientWhenServiceNotInstalled() {
         let client = MockTunnelClient()
         let model = WireGuardStatusModel(
@@ -1162,7 +1287,7 @@ final class WGStatusBarTests: XCTestCase {
 
         model.loadTunnels()
         spinRunLoop()
-        XCTAssertEqual(client.listCalls, 0, "до первого тика list не отправляется")
+        XCTAssertEqual(client.stateCalls, 0, "до первого тика state не отправляется")
 
         model.refresh()
         waitUntil({ !model.isLoading }, "refresh должен завершиться")
@@ -1170,7 +1295,138 @@ final class WGStatusBarTests: XCTestCase {
 
         model.loadTunnels()
         spinRunLoop()
-        XCTAssertEqual(client.listCalls, 0, "в absent-состоянии list не отправляется")
+        XCTAssertEqual(client.stateCalls, 0, "в absent-состоянии state не отправляется")
+    }
+
+    // MARK: - Модель: имена интерфейсов из state (приоритет над namer)
+
+    /// state-utun совпал с интерфейсом снапшота → displayName становится
+    /// именем конфига, namer-результат перетёрт: демон — источник имён в
+    /// daemon-режиме (`.name`-файлы под root, namer промахивается всегда).
+    func testStateInterfaceNameOverridesNamerResult() {
+        let client = MockTunnelClient()
+        client.configure(stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")])])
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "wrong-name"]),
+            tunnelClient: client
+        )
+        XCTAssertEqual(model.interfaces.first?.displayName, "wrong-name", "предусловие: namer дал своё имя")
+
+        model.loadTunnels()
+        waitUntil(
+            { model.interfaces.first?.displayName == "kvmka-ai" },
+            "ответ state обязан перетереть namer на первом же пути записи"
+        )
+    }
+
+    /// Тик не откатывает имя: 5-с refresh гонит namer-резолв (промах), затем
+    /// применяет сохранённый state-маппинг — без этого карточка возвращала
+    /// бы `utunN` при открытом меню каждые 5 с.
+    func testRefreshKeepsStateInterfaceNameWhenNamerMisses() {
+        let showExecutor = CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3")))
+        let client = MockTunnelClient()
+        client.configure(stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")])])
+        let model = makeInstalledModel(
+            showExecutor: showExecutor,
+            tunnelNamer: MockTunnelNamer(),  // промах на каждом тике
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.interfaces.first?.displayName == "kvmka-ai" },
+            "state обязан дать имя конфига"
+        )
+
+        let callsAfterFirstTick = showExecutor.calls
+        model.refresh()
+        waitUntil(
+            { showExecutor.calls > callsAfterFirstTick && !model.isLoading },
+            "новый тик должен пройти"
+        )
+
+        XCTAssertEqual(
+            model.interfaces.first?.displayName,
+            "kvmka-ai",
+            "5-с тик с namer-промахом не должен откатывать имя к utunN"
+        )
+    }
+
+    /// Демон исчез посреди запуска (uninstall из меню): успешный тик
+    /// sudo-фолбэка обязан сбросить state-маппинг — иначе последний ответ
+    /// умершего демона вечно перетирал бы свежий namer-резолв при
+    /// переиспользовании utun другим конфигом (namer — источник имён в
+    /// dev-режиме без демона).
+    func testDaemonlessTickDropsStaleStateInterfaceNames() {
+        let client = MockTunnelClient()
+        client.configure(stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")])])
+        // sun_path вмещает ~103 байта — короткий /tmp-путь с усечённым UUID.
+        let socketPath = "/tmp/wgstatusbar-modeltests-"
+            + UUID().uuidString.prefix(8)
+            + ".sock"
+        daemonSocketPaths.append(socketPath)
+        let server = DaemonServer(
+            executor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            socketPath: socketPath
+        )
+        daemonServerTasks.append(Task.detached { try await server.run() })
+        waitDaemonListening(socketPath: socketPath)
+
+        let fallbackRunner = StubCommandRunner(results: [.success(makeConnectedDump(interfaceName: "utun3"))])
+        let model = WireGuardStatusModel(
+            commandRunner: fallbackRunner,
+            tunnelNamer: MockTunnelNamer(knownNames: ["utun3": "fresh-namer-name"]),
+            socketExists: { FileManager.default.fileExists(atPath: socketPath) },
+            socketPath: socketPath,
+            tunnelCommandRunner: client
+        )
+        model.refresh()
+        waitUntil({ model.serviceState == .installed }, "живой демон должен довести модель до installed")
+        model.loadTunnels()
+        waitUntil(
+            { model.interfaces.first?.displayName == "kvmka-ai" },
+            "предусловие: пока демон жив, state перетирает namer"
+        )
+
+        // Демон удалили: сокета нет — тик уходит в фолбэк-раннер.
+        try? FileManager.default.removeItem(atPath: socketPath)
+        model.refresh()
+        waitUntil(
+            { fallbackRunner.consumedCount > 0 && !model.isLoading },
+            "тик фолбэка должен пройти"
+        )
+
+        XCTAssertEqual(model.serviceState, .absent, "сокет исчез — состояние absent")
+        XCTAssertEqual(
+            model.interfaces.first?.displayName,
+            "fresh-namer-name",
+            "устаревший state-маппинг не должен перетирать namer в dev-режиме без демона"
+        )
+    }
+
+    /// Конфликт «два конфига на одном utun» (окно свежести пар на стороне
+    /// данных): свёртка маппинга — first-wins без падения
+    /// (`Dictionary(uniqueKeysWithValues:)` на дубликате крэшила бы).
+    func testStateMappingKeepsFirstEntryForDuplicatedUtun() {
+        let client = MockTunnelClient()
+        client.configure(stateResults: [.success([
+            TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3"),
+            TunnelState(name: "kvmka-full", isUp: true, utun: "utun3"),
+        ])])
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+
+        model.loadTunnels()
+        waitUntil({ model.tunnels.count == 2 }, "обе строки state должны попасть в tunnels")
+
+        XCTAssertEqual(
+            model.interfaces.first?.displayName,
+            "kvmka-ai",
+            "при дубликате utun в маппинге побеждает первый ответ"
+        )
     }
 
     // MARK: - Гигиена ключей после удаления StatusMenuView
@@ -1279,27 +1535,34 @@ private final class MockTunnelNamer: WireGuardTunnelNaming {
 /// (наблюдение in-flight-состояния модели без гонок).
 private final class MockTunnelClient: TunnelCommandRunning {
     private let lock = NSLock()
-    private var listResults: [Result<[String], Error>] = []
+    private var stateResults: [Result<[TunnelState], Error>] = []
     private var opResults: [Result<Void, Error>] = []
     private var gated = false
     private var gateContinuation: CheckedContinuation<Void, Never>?
-    private var listCallsStorage = 0
+    /// Порядковый номер (с 1) state-вызова, который должен повиснуть до
+    /// `releaseStateGate()` — управляемо задержанный ответ одного запроса
+    /// (гонка «опоздавший до-операционный state против optimistic flip»).
+    private var stateGateCallNumber: Int?
+    private var stateGateContinuation: CheckedContinuation<Void, Never>?
+    private var stateCallsStorage = 0
     private var upCallsStorage: [String] = []
     private var downCallsStorage: [String] = []
 
     func configure(
-        listResults: [Result<[String], Error>] = [],
+        stateResults: [Result<[TunnelState], Error>] = [],
         opResults: [Result<Void, Error>] = [],
-        gate: Bool = false
+        gate: Bool = false,
+        gateStateCall: Int? = nil
     ) {
         lock.withLock {
-            self.listResults = listResults
+            self.stateResults = stateResults
             self.opResults = opResults
             self.gated = gate
+            self.stateGateCallNumber = gateStateCall
         }
     }
 
-    var listCalls: Int { lock.withLock { listCallsStorage } }
+    var stateCalls: Int { lock.withLock { stateCallsStorage } }
     var upCalls: [String] { lock.withLock { upCallsStorage } }
     var downCalls: [String] { lock.withLock { downCallsStorage } }
 
@@ -1311,14 +1574,25 @@ private final class MockTunnelClient: TunnelCommandRunning {
         }
     }
 
-    func list() async throws -> [String] {
-        let result: Result<[String], Error> = lock.withLock {
-            listCallsStorage += 1
-            return listResults.isEmpty ? .success([]) : listResults.removeFirst()
+    /// Отпускает зависший на клапане state-вызов.
+    func releaseStateGate() {
+        lock.withLock {
+            stateGateContinuation?.resume()
+            stateGateContinuation = nil
+            stateGateCallNumber = nil
         }
-        switch result {
-        case .success(let names):
-            return names
+    }
+
+    func state() async throws -> [TunnelState] {
+        let call: (number: Int, result: Result<[TunnelState], Error>) = lock.withLock {
+            stateCallsStorage += 1
+            let result = stateResults.isEmpty ? .success([]) : stateResults.removeFirst()
+            return (stateCallsStorage, result)
+        }
+        await waitOnStateGate(callNumber: call.number)
+        switch call.result {
+        case .success(let states):
+            return states
         case .failure(let error):
             throw error
         }
@@ -1348,13 +1622,30 @@ private final class MockTunnelClient: TunnelCommandRunning {
 
     /// Клапан для up/down: когда активен, первая операция висит до
     /// `releaseGate()` (одна операция за раз — параллельных вызовов модель
-    /// не порождает); `list` клапан не трогает — гейтится только наблюдаемая
+    /// не порождает); `state` клапан не трогает — гейтится только наблюдаемая
     /// операция toggle.
     private func waitOnGate() async {
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let resumeNow = lock.withLock {
                 if gated, gateContinuation == nil {
                     gateContinuation = continuation
+                    return false
+                }
+                return true
+            }
+            if resumeNow {
+                continuation.resume()
+            }
+        }
+    }
+
+    /// Клапан для ровно одного state-вызова с заданным номером (остальные
+    /// проходят): задержка ответа одного запроса без остановки прочих.
+    private func waitOnStateGate(callNumber: Int) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let resumeNow = lock.withLock {
+                if callNumber == stateGateCallNumber, stateGateContinuation == nil {
+                    stateGateContinuation = continuation
                     return false
                 }
                 return true

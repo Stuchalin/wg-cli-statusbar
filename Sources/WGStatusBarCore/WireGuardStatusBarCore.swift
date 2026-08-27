@@ -167,10 +167,21 @@ public final class WireGuardStatusModel: ObservableObject {
     /// (сокет-файл + исход обмена) — не хранится, пересчитывается на каждом
     /// refresh. Управляет пунктом меню установки/обновления/удаления сервиса.
     @Published public private(set) var serviceState: ServiceState = .absent
-    /// Туннели из конфигов wg-quick (демон, `list`): имена + выведенный isUp.
-    /// Данные меню — оппортунистические: ошибки `loadTunnels()` глотаются,
-    /// статус карточки от них не зависит.
+    /// Туннели из конфигов wg-quick (демон, запрос `state`): имена + isUp —
+    /// данные демона, а не вывод модели (`/var/run/wireguard` читаем только
+    /// root, приложение состояние из дампа не выводит). Данные меню —
+    /// оппортунистические: ошибки `loadTunnels()` глотаются, статус карточки
+    /// от них не зависит.
     @Published public private(set) var tunnels: [TunnelInfo] = []
+    /// Маппинг имён интерфейсов из последнего ответа `state` (`utun → имя
+    /// конфига`): демон — источник имён в daemon-режиме (`.name`-файлы под
+    /// root, namer в приложении промахивается всегда), поэтому применяется
+    /// ПОВЕРХ namer-резолва на обоих путях записи displayName (`loadTunnels`
+    /// и 5-с тик); namer остаётся для непокрытых интерфейсов и dev-режима
+    /// без демона. Успешный тик БЕЗ демона (sudo-фолбэк) маппинг сбрасывает:
+    /// раз демон исчез, его последний ответ устарел, и перетирать живой
+    /// namer-резолв он больше не должен.
+    private var stateInterfaceNames: [String: String] = [:]
     /// Имена туннелей с операцией в полёте (наличие имени = in-flight): строки
     /// меню некликабельны, show-тик подавлен, снапшот не устаревает.
     /// Отдельного состояния «failed» нет — ошибку несёт существующий one-tick
@@ -198,6 +209,18 @@ public final class WireGuardStatusModel: ObservableObject {
     private var lastSuccessAt: Date?
     /// Номер текущего refresh; завершения старых поколений отбрасываются.
     private var refreshGeneration = 0
+    /// Номер текущего запроса `state`; применяются только ответы последнего
+    /// (latest-wins, как `refreshGeneration` у тика). Последовательный демон
+    /// упорядочивает отправку ответов, но не их применение моделью: обмен
+    /// каждого запроса идёт через свой GCD-поток → continuation → MainActor,
+    /// и опоздавший ответ старого запроса не должен перетирать ни свежее
+    /// состояние, ни оптимистичную точку после up/down. Последнее закрыто
+    /// синхронностью самого flip'а: завершение операции (успех и провал)
+    /// поднимает поколение тем же MainActor-блоком, что его ставит
+    /// (`loadTunnels()` сразу за `applyOpOutcome`), поэтому до-операционный
+    /// ответ применяется либо до flip'а, либо в чужом поколении — третьего
+    /// interleaving нет.
+    private var loadTunnelsGeneration = 0
 
     public convenience init() {
         self.init(
@@ -339,8 +362,16 @@ public final class WireGuardStatusModel: ObservableObject {
                 )
                 await MainActor.run { [weak self] in
                     guard let self, generation == self.refreshGeneration else { return }
-                    self.interfaces = parsed
-                    self.recomputeTunnelStates()
+                    if socketPresent {
+                        self.interfaces = Self.applyingStateInterfaceNames(self.stateInterfaceNames, to: parsed)
+                    } else {
+                        // Успешный тик без демона (sudo-фолбэк) — источник имён
+                        // снова namer: маппинг последнего ответа state устарел
+                        // вместе с демоном и не должен вечно перетирать свежий
+                        // резолв при переиспользовании utun другим конфигом.
+                        self.stateInterfaceNames = [:]
+                        self.interfaces = parsed
+                    }
                     self.lastSuccessAt = self.now()
                     self.isLoading = false
                     self.serviceState = ServiceState.derive(socketFileExists: socketPresent, outcome: .success(output))
@@ -387,6 +418,25 @@ public final class WireGuardStatusModel: ObservableObject {
             }
         }
 
+        return resolved
+    }
+
+    /// Проставляет интерфейсам `displayName` из state-маппинга демона — ПОВЕРХ
+    /// namer-резолва: демон читает `.name`-файлы под root и в daemon-режиме
+    /// точнее (регрессия фикса: без этого 5-с тик возвращал бы `utunN` при
+    /// namer-промахе, а карточка теряла имя конфига при открытом меню).
+    /// Интерфейсов вне маппинга не трогает — их имя остаётся от namer'а.
+    private static func applyingStateInterfaceNames(
+        _ mapping: [String: String],
+        to interfaces: [WGInterface]
+    ) -> [WGInterface] {
+        guard !mapping.isEmpty else { return interfaces }
+        var resolved = interfaces
+        for index in resolved.indices {
+            if let name = mapping[resolved[index].name] {
+                resolved[index].displayName = name
+            }
+        }
         return resolved
     }
 
@@ -445,49 +495,61 @@ public final class WireGuardStatusModel: ObservableObject {
 
     // MARK: - Туннели
 
-    /// Туннель поднят ⟺ какой-то интерфейс снапшота носит его имя: namer
-    /// резолвит `utunN` → имя конфига wg-quick в `displayName`, а единственный
-    /// источник правды о состоянии — `wg show`.
-    ///
-    /// Честная оговорка: при нерезолве namer'а (displayName остался `utunN` —
-    /// `.name`-файл потерян или интерфейс поднят вне wg-quick) строка
-    /// показывает «выключен», а клик up приносит err от wg-quick («interface
-    /// already exists») — карточка покажет общую ошибку операции (деталь на
-    /// wire не приходит). Расхождение живёт, пока туннель не пересоздадут:
-    /// самоизлечения нет.
-    public func isTunnelUp(named name: String) -> Bool {
-        interfaces.contains { $0.displayName == name }
-    }
-
-    /// Подтягивает список туннелей демона (`list` → имена; isUp выводится из
-    /// текущего снапшота). Триггеры: открытие меню, ответ up/down, переход
-    /// serviceState при открытом меню — НЕ 5-секундный тик. Ошибки глотаются
-    /// молча: данные меню оппортунистические, не источник статуса (иначе
-    /// dev-фолбэк без демона получал бы ложную ошибку на карточке). До
-    /// `.installed` демон не дёргается вовсе: у старого build `list` —
-    /// unknown command.
+    /// Подтягивает состояние туннелей демона (`state` → имена + isUp + маппинг
+    /// имён интерфейсов). Триггеры: открытие меню, ответ up/down, переход
+    /// serviceState при открытом меню — НЕ 5-секундный тик (тики `tunnels` не
+    /// переворачивают: состояние — данные демона, снапшот здесь не при делах).
+    /// Ошибки глотаются молча: данные меню оппортунистические, не источник
+    /// статуса (иначе dev-фолбэк без демона получал бы ложную ошибку на
+    /// карточке); строки и имена держат последнее известное. Ответ применяется
+    /// latest-wins (`loadTunnelsGeneration`): маппинг, переименование карточки
+    /// и `tunnels` — один снимок одного ответа, опоздавший ответ старого
+    /// запроса отбрасывается целиком. До `.installed` демон не дёргается
+    /// вовсе: у старого build `state` — unknown command.
     public func loadTunnels() {
         guard serviceState == .installed else { return }
+        loadTunnelsGeneration += 1
+        let generation = loadTunnelsGeneration
         let client = tunnelCommandRunner
         Task { @MainActor [weak self] in
             guard let self else { return }
             do {
-                let names = try await client.list()
-                let updated = names.map { TunnelInfo(name: $0, isUp: self.isTunnelUp(named: $0)) }
-                // Без изменений — без republish (как recomputeTunnelStates):
-                // идентичный список не должен пересобирать открытое меню.
+                let states = try await client.state()
+                guard generation == self.loadTunnelsGeneration else { return }
+                let mapping = Dictionary(
+                    states.compactMap { state in state.utun.map { ($0, state.name) } },
+                    uniquingKeysWith: { first, _ in first }
+                )
+                self.stateInterfaceNames = mapping
+                // Первый путь записи displayName поверх namer'а: ответ state
+                // переименовывает карточку живьём (открытое меню), не дожидаясь
+                // 5-с тика.
+                let renamed = Self.applyingStateInterfaceNames(mapping, to: self.interfaces)
+                if renamed != self.interfaces {
+                    self.interfaces = renamed
+                }
+                let updated = states.map { TunnelInfo(name: $0.name, isUp: $0.isUp) }
+                // Без изменений — без republish: идентичный список не должен
+                // пересобирать открытое меню.
                 if updated != self.tunnels {
                     self.tunnels = updated
                 }
             } catch {
-                // Молча: список конфигов — не источник статуса.
+                // Молча: строки и имена держат последнее известное.
             }
         }
     }
 
-    /// Клик по строке туннеля: направление — из `isTunnelUp`, операция — через
+    /// Клик по строке туннеля: направление — из `tunnels` (последний ответ
+    /// `state`; строки без ответа честно читаются «down»), операция — через
     /// демон. Пока имя в `inFlightTunnels`, show-тик подавлен и снапшот не
-    /// устаревает. Успех → немедленный `refresh()` + `loadTunnels()`;
+    /// устаревает. Успех → оптимистичная точка строки (`ok` демона доказал
+    /// новое состояние; ответ `state` приедет позже — в последовательной
+    /// очереди демона он стоит за show немедленного refresh — и сойдётся к
+    /// истине; опоздавший ДО-операционный state отменить её не может —
+    /// завершение операции поднимает поколение `loadTunnelsGeneration` тем
+    /// же MainActor-блоком, что ставит flip) + немедленный `refresh()` +
+    /// `loadTunnels()`;
     /// провал → one-tick `lastFailure` + `loadTunnels()` БЕЗ refresh — пролог
     /// `refresh()` стирает `lastFailure` синхронно, ошибка не отрисовалась бы
     /// вовсе; данные сойдёт следующий 5-с тик (прецедент: провал установки
@@ -498,7 +560,7 @@ public final class WireGuardStatusModel: ObservableObject {
         // ровно для одной операции; клик до того, как строки ушли в disabled
         // (ре-ренд SwiftUI асинхронен), — молчаливый no-op.
         guard inFlightTunnels.isEmpty else { return }
-        let shouldTearDown = isTunnelUp(named: name)
+        let shouldTearDown = tunnels.first(where: { $0.name == name })?.isUp ?? false
         inFlightTunnels.insert(name)
         let client = tunnelCommandRunner
         Task { @MainActor [weak self] in
@@ -510,6 +572,7 @@ public final class WireGuardStatusModel: ObservableObject {
                     try await client.up(name)
                 }
                 self.inFlightTunnels.remove(name)
+                self.applyOpOutcome(name: name, isUp: !shouldTearDown)
                 self.refresh()
                 self.loadTunnels()
             } catch {
@@ -520,14 +583,17 @@ public final class WireGuardStatusModel: ObservableObject {
         }
     }
 
-    /// isUp строк пересчитывается из свежего снапшота после каждого успешного
-    /// тика (`list` отдаёт только имена). Без изменений — без republish.
-    private func recomputeTunnelStates() {
-        guard !tunnels.isEmpty else { return }
-        let updated = tunnels.map { TunnelInfo(name: $0.name, isUp: isTunnelUp(named: $0.name)) }
-        if updated != tunnels {
-            tunnels = updated
-        }
+    /// Оптимистичная точка строки сразу после успешного up/down: имя снято
+    /// с `inFlightTunnels` синхронно, а ответ `state` приедет позже — без
+    /// переворота строка держала бы старую точку, и повторный клик в этом
+    /// окне читал бы старое направление и слал ту же выполненную команду
+    /// (up по поднятому → «already exists» → ложная ошибка операции).
+    /// `ok` демона состояние уже доказал; следующий ответ `state` сойдётся
+    /// к истине и перезальёт точку. Без изменения — без republish.
+    private func applyOpOutcome(name: String, isUp: Bool) {
+        guard let index = tunnels.firstIndex(where: { $0.name == name }) else { return }
+        guard tunnels[index].isUp != isUp else { return }
+        tunnels[index] = TunnelInfo(name: name, isUp: isUp)
     }
 
     private func startTimer() {

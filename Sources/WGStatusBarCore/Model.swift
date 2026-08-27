@@ -57,10 +57,11 @@ public struct WGPeer: Identifiable, Equatable {
     }
 }
 
-/// Туннель из конфигов wg-quick (демон, запрос `list`): имя = basename
-/// конфига. `isUp` — не данные демона, а вывод модели из текущего снапшота
-/// `wg show` (`WireGuardStatusModel.isTunnelUp(named:)`): пересчитывается на
-/// каждом успешном тике и каждом ответе `list`.
+/// Туннель из конфигов wg-quick (демон, запрос `state`): имя = basename
+/// конфига. `isUp` — данные демона, а не вывод модели: `/var/run/wireguard`
+/// читаем только root, приложение состояние из дампа не выводит.
+/// Обновляется каждым ответом `state` (открытие меню, ответ up/down, переход
+/// serviceState) — 5-с тик его не переворачивает.
 public struct TunnelInfo: Equatable {
     public let name: String
     public let isUp: Bool
@@ -68,5 +69,22 @@ public struct TunnelInfo: Equatable {
     public init(name: String, isUp: Bool) {
         self.name = name
         self.isUp = isUp
+    }
+}
+
+/// Строка состояния туннеля из запроса `state` демона. В отличие от
+/// `TunnelInfo`, и `isUp`, и интерфейс — данные демона, а не вывод модели:
+/// `/var/run/wireguard` читаем только root, приложение состояние из дампа
+/// не выводит. `utun` заполнен только у поднятого туннеля.
+public struct TunnelState: Equatable {
+    public let name: String
+    public let isUp: Bool
+    /// Имя интерфейса поднятом туннеля (`utun2`); у опущенного — `nil`.
+    public let utun: String?
+
+    public init(name: String, isUp: Bool, utun: String?) {
+        self.name = name
+        self.isUp = isUp
+        self.utun = utun
     }
 }
