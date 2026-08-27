@@ -108,10 +108,10 @@
 - Modify: `README.md`
 - Modify: `CLAUDE.md`
 
-- [ ] README:15 — иконка «on» = поднят хоть один wg-интерфейс (есть в дампе) + данные свежи; хендшейк-свежесть описывается как атрибут карточки (README:17–19 уже так); README:37 — правило «peer is active / interface is connected» заменить на факт-семантику иконки
-- [ ] README:38, :143–145 — сверить формулировки: сталость/потеря источника остаются как есть, «connected»-слова заменить на туннель-семантику где нужно
-- [ ] CLAUDE.md: Domain rules — абзац про `showsConnected`/`isActive`/`isConnected` переписать под `showsTunnelUp` = наличие интерфейса + свежесть; Tunnels data flow — 5-с тик становится триггером `loadTunnels()` (убрать «never in the 5-second tick»); буллет `TunnelInfo` в секции WGStatusBarCore (список триггеров state); абзац Data flow вверху («A `Timer` re-fires refresh every 5 seconds»; «it no longer feeds the icon (`showsConnected`)»); инвариант бюджета дополнить (+ state ~0 в очереди, show + state + op ≈ 13 с < 16 с); Testing notes — `iconUp` вместо `iconConnected`, новые кейсы
-- [ ] Гейт: `swift build` + `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный полный сьют (доки не ломают код, но сверка идёт на зелёной базе)
+- [x] README:15 — иконка «on» = поднят хоть один wg-интерфейс (есть в дампе) + данные свежи; хендшейк-свежесть описывается как атрибут карточки (README:17–19 уже так); README:37 — правило «peer is active / interface is connected» заменить на факт-семантику иконки
+- [x] README:38, :143–145 — сверить формулировки: сталость/потеря источника остаются как есть, «connected»-слова заменить на туннель-семантику где нужно
+- [x] CLAUDE.md: Domain rules — абзац про `showsConnected`/`isActive`/`isConnected` переписать под `showsTunnelUp` = наличие интерфейса + свежесть; Tunnels data flow — 5-с тик становится триггером `loadTunnels()` (убрать «never in the 5-second tick»); буллет `TunnelInfo` в секции WGStatusBarCore (список триггеров state); абзац Data flow вверху («A `Timer` re-fires refresh every 5 seconds»; «it no longer feeds the icon (`showsConnected`)»); инвариант бюджета дополнить (+ state ~0 в очереди, show + state + op ≈ 13 с < 16 с); Testing notes — `iconUp` вместо `iconConnected`, новые кейсы
+- [x] Гейт: `swift build` + `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный полный сьют (доки не ломают код, но сверка идёт на зелёной базе)
 
 ### Task 4: Verify acceptance criteria
 

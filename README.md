@@ -12,7 +12,7 @@ The project is split into three targets:
 
 ## What it does
 
-- Menu-bar icon (with the VoiceOver title `wg: on/off`): "on" when at least one interface has a recent peer handshake **and** the data itself is fresh — a successful refresh within the last 10 s. If refreshes keep failing, the icon goes dark within ~10–15 s even when the last snapshot was connected.
+- Menu-bar icon (with the VoiceOver title `wg: on/off`): "on" when at least one WireGuard interface exists in the kernel (the dump is non-empty — a tunnel is up) **and** the data itself is fresh — a successful refresh within the last 10 s. Handshake freshness does not drive the icon anymore: WireGuard handshakes on demand, so an idle but live tunnel stays "on" (it lights up as soon as the first tick sees the interface, before any handshake), and per-peer freshness lives in the card's colored dots. If refreshes keep failing, the icon goes dark within ~10–15 s even when the last snapshot still showed a tunnel up.
 - Opening the menu shows a status card per interface:
   - Colored freshness dot: green (handshake ≤ 2 min), orange (2–10 min), secondary (> 10 min / never).
   - Human-readable tunnel name (`work-vpn`) with the raw interface name (`utun2`) below it.
@@ -22,19 +22,19 @@ The project is split into three targets:
   - ⓘ toggle with a color legend; the expanded/collapsed state persists across menu reopenings.
   - Stale-data handling: when no refresh succeeds for more than 10 s, the last snapshot is not cleared — it stays in the card dimmed with a "Data is stale" marker above it (the current refresh error shows in its usual place).
 - Native menu items with keyboard navigation: Refresh ⌘R, Open Configs ⌘O, the daemon service item (Install / Update / Remove, depending on service state), Quit ⌘Q.
-- Auto-refresh every 5 seconds; Refresh also forces a re-scan of tunnel names.
+- Auto-refresh every 5 seconds — both the interface snapshot and the daemon `state` behind the tunnel rows, so a tunnel raised or lowered outside the app (e.g. `wg-quick` in a terminal) flips its row within 5 s even while the menu is open; Refresh also forces a re-scan of tunnel names.
 - Quick access to common WireGuard config folders.
 - Tunnel management: a "Tunnels" section in the menu (between Open Configs and the service item) lists the wg-quick configs found on the machine, one row per tunnel — a filled dot (●) when it is up, a hollow one (○) when it is down. Clicking a row runs `wg-quick up`/`down` through the daemon:
   - The menu stays open; the clicked row shows a spinner, and all other rows (plus Refresh) are disabled until the operation finishes — one operation at a time.
   - Up/down state and tunnel names are daemon data: the daemon's `state` request returns each config's up/down verdict together with its actual interface name (`utun2`). The daemon reads `/var/run/wireguard` as root — a regular user cannot — so it is the only trustworthy source for both the row dots and the click direction.
   - The section appears only when the installed daemon is current and the config list is non-empty. An old daemon is reported as outdated by the version numbers carried in every reply (the 5-second status tick detects it) — the menu shows **Update Service** instead of the section.
   - A failed operation (missing `wg-quick`, renamed config, timeout) shows a localized one-tick error on the card; the row itself returns to normal.
-  - While an operation is in flight the periodic status refresh is paused and the snapshot does not age out (the daemon serves one connection at a time, so the operation would block it anyway — see below).
+  - While an operation is in flight the periodic status refresh and state polling are paused and the snapshot does not age out (the daemon serves one connection at a time, so the operation would block it anyway — see below).
 
 ## How it reads status
 
 - Data source is the machine-readable `wg show all dump` (tab-separated): exact epoch handshake times and byte counters. Interface lines have 5 fields, peer lines 9; empty values are `(none)`. Secret fields (private key, preshared key) never reach the app at all: the daemon replaces them with `(none)` before sending anything over the socket, and raw output is never logged on either side.
-- Peer is active while its handshake is fresh or aging (green/orange); interface is connected when any peer is active.
+- Handshake freshness (green ≤ 2 min, orange 2–10 min) is a card attribute: it colors the per-peer dots (the interface row shows the freshest of its peers) and says nothing about whether a tunnel is up — that is the icon's job (non-empty dump), see above.
 - A snapshot only counts while it is fresh: data from the last successful tick is trusted for 10 s, so one failed refresh does not flicker the icon. Past that the icon no longer shows "on" and the card dims the snapshot ("Data is stale") until a refresh succeeds again.
 - Tunnel names come from the wg-quick mechanism on macOS: `wg-quick up <config>` writes the actual interface name to `/var/run/wireguard/<config>.name`, validated by the adjacent `<utun>.sock`. In normal use (daemon installed) the daemon serves this mapping in its `state` reply — the `.name` files are readable only by root, so the app-side scan of the same directory would always miss; the app-side scan remains for the sudo dev fallback and for interfaces the daemon's reply doesn't cover. Unknown interfaces fall back to the raw name (`utun2`).
 - Reading WireGuard state requires root; in normal use the app itself never runs as root — it talks to the privileged daemon (next section). The dev fallback below runs a bare binary under sudo.
