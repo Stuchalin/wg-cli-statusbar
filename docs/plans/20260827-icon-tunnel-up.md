@@ -115,10 +115,10 @@
 
 ### Task 4: Verify acceptance criteria
 
-- [ ] Все требования Overview реализованы: иконка от факта туннеля, staleness-гейт сохранён, опрос state каждые 5 с, гард in-flight, мёртвый код удалён
-- [ ] Краевые случаи покрыты тестами: пустой дамп → off; все хендшейки stale/never → on; устаревший снапшот → off; sudo-фолбэк без демона — тиковый `loadTunnels()` тихий no-op
-- [ ] Полный сьют: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`
-- [ ] E2E-тестов в проекте нет (конвенция) — ручной чеклист в Post-Completion
+- [x] Все требования Overview реализованы: иконка от факта туннеля, staleness-гейт сохранён, опрос state каждые 5 с, гард in-flight, мёртвый код удалён
+- [x] Краевые случаи покрыты тестами: пустой дамп → off; все хендшейки stale/never → on; устаревший снапшот → off; sudo-фолбэк без демона — тиковый `loadTunnels()` тихий no-op
+- [x] Полный сьют: `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test`
+- [x] E2E-тестов в проекте нет (конвенция) — ручной чеклист в Post-Completion
 
 ### Task 5: [Final] Завершение плана
 
