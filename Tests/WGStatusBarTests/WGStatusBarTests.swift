@@ -212,6 +212,15 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertEqual(staleAndNever.menuTitle, L10n.string("menu.title.on"))
     }
 
+    /// Интерфейс без единого пира (конфиг без секций [Peer]) тоже зажигает
+    /// щиток: иконка — факт наличия wg-интерфейса в ядре, а не активность
+    /// пиров; удалённая цепочка `isAnyConnected` читала такой дамп «off».
+    func testTunnelUpWithPeerlessInterfaceStillShowsUp() {
+        let peerless = makeRefreshedModel(dump: makeDump([makeInterfaceDumpLine("wg0")]))
+
+        XCTAssertEqual(peerless.menuTitle, L10n.string("menu.title.on"))
+    }
+
     // MARK: - Модель: refresh — dump-команда и displayName из namer
 
     func makeInterfaceDumpLine(_ name: String) -> String {
@@ -1096,8 +1105,8 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(model.isDataStale, "успешный тик снимает устарелость")
     }
 
-    /// Тиковый state: при живом демоне и без операции в полёте `loadTunnels()`
-    /// (тот же вызов, что в замыкании startTimer()) отправляет `state` и
+    /// Тиковый state: при живом демоне и без операции в полёте `tick()` (тот
+    /// же вход, что у замыкания startTimer()) отправляет `state` и
     /// переворачивает строку — туннель, опущенный в терминале, сходится без
     /// переоткрытия меню.
     func testTickDrivenLoadTunnelsSendsStateAndFlipsRow() {
@@ -1118,7 +1127,7 @@ final class WGStatusBarTests: XCTestCase {
         )
         XCTAssertEqual(client.stateCalls, 1, "предусловие: один state на заполнение")
 
-        model.loadTunnels()  // тик таймера: тот же путь, что замыкание startTimer()
+        model.tick()  // тик таймера
         waitUntil(
             { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
             "тиковый state должен перевернуть строку ●→○ без переоткрытия меню"
@@ -1153,7 +1162,7 @@ final class WGStatusBarTests: XCTestCase {
         model.toggleTunnel(named: "kvmka-ai")
         waitUntil({ !client.upCalls.isEmpty }, "операция должна стартовать")
 
-        model.loadTunnels()  // тиковый state посреди операции
+        model.tick()  // тиковый state посреди операции
         spinRunLoop()
         XCTAssertEqual(client.stateCalls, 1, "in-flight операция не должна ставить state в очередь демона")
 

@@ -600,18 +600,24 @@ public final class WireGuardStatusModel: ObservableObject {
         tunnels[index] = TunnelInfo(name: name, isUp: isUp)
     }
 
-    /// Тик каждые `refreshInterval` несёт и снапшот, и данные меню: замыкание
-    /// дёргает `refresh()` + `loadTunnels()` — строки туннелей и маппинг имён
-    /// не замерзают между открытиями меню. Оба вызова с собственными гардами
-    /// (in-flight операция, неустановленный демон) — тихие no-op.
+    /// Тик каждые `refreshInterval` несёт и снапшот, и данные меню — строки
+    /// туннелей и маппинг имён не замерзают между открытиями меню. Оба вызова
+    /// с собственными гардами (in-flight операция, неустановленный демон) —
+    /// тихие no-op. Отдельный метод, а не тело замыкания, чтобы тестовая
+    /// точка входа совпадала с продакшн-точкой (сам `Timer` не тестируется —
+    /// конвенция проекта).
+    func tick() {
+        refresh()
+        loadTunnels()
+    }
+
     private func startTimer() {
         // .common, а не дефолтный режим run loop: пока открыто меню NSStatusItem,
         // главный run loop работает в NSEventTrackingRunLoopMode и таймер из
         // scheduledTimer стоит — карточка замирала бы на всё время открытого меню.
         let timer = Timer(timeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refresh()
-                self?.loadTunnels()
+                self?.tick()
             }
         }
         RunLoop.main.add(timer, forMode: .common)
