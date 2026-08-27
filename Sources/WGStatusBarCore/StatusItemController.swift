@@ -312,8 +312,8 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// Загруженность меняется и при открытом меню (тик обновления работает
     /// в .common-режиме run loop) — состояние пункта «Обновить» синхронизируем
     /// живьём, не дожидаясь пересборки в `menuNeedsUpdate`. Туннельная
-    /// операция в полёте глушит show-тик — клик по «Обновить» был бы молчаливым
-    /// no-op, пункт отключается вместе со строками.
+    /// операция в полёте глушит show- и state-тики — клик по «Обновить» был
+    /// бы молчаливым no-op, пункт отключается вместе со строками.
     private func updateRefreshItemEnabledState() {
         guard let menu else { return }
         for item in menu.items where item.tag == StatusMenuAction.refresh.rawValue {

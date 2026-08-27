@@ -16,8 +16,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // дожидаясь тика. Отдельный loadTunnels здесь не нужен (и был бы
         // мёртвым: refresh завершится позже асинхронно, а его guard успевает
         // увидеть только прошлое serviceState) — список подтянет переход
-        // serviceState при открытом меню (StatusItemController) либо
-        // ближайшее открытие меню (menuNeedsUpdate).
+        // serviceState при открытом меню (StatusItemController), ближайший
+        // 5-с тик либо открытие меню (menuNeedsUpdate).
         installer.onSuccess = { [weak model] in
             model?.refresh()
         }

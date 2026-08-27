@@ -95,12 +95,12 @@
 - Modify: `Sources/WGStatusBarCore/StatusItemController.swift`
 - Modify: `Tests/WGStatusBarTests/WGStatusBarTests.swift`
 
-- [ ] `startTimer()` (:599): замыкание таймера дёргает `refresh()` + `loadTunnels()`; doc-комментарий таймера дополнить (тик теперь несёт и данные меню)
-- [ ] `loadTunnels()` (:509): добавить гард `guard inFlightTunnels.isEmpty` после гарда `serviceState` (:510); переписать doc-комментарий — триггеры пополняются 5-с тиком («never in the 5-second tick» уходит), при in-flight операции запрос не выстраивается в очередь демона
-- [ ] Doc-комментарии, ложные после появления тикового `state`: `TunnelInfo` (Model.swift:63–64 — «5-с тик его не переворачивает» уходит, список триггеров пополняется тиком), `inFlightTunnels` (:185–188 — «show-тик подавлен» → show- и state-тики подавлены), `updateRefreshItemEnabledState` (StatusItemController.swift:314 — «глушит show-тик» → оба тика)
-- [ ] Тест (success): при `serviceState == .installed` без in-flight операции вызов `loadTunnels()` отправляет `state` (счётчик мока растёт) — существующий поток тестов дополняется прямым кейсом тикового вызова
-- [ ] Тест (guard): имя в `inFlightTunnels` → `loadTunnels()` не отправляет `state` (счётчик не растёт); после завершения операции явный post-op `loadTunnels()` отправляет
-- [ ] Гейт: `swift build` + `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный полный сьют
+- [x] `startTimer()` (:599): замыкание таймера дёргает `refresh()` + `loadTunnels()`; doc-комментарий таймера дополнить (тик теперь несёт и данные меню)
+- [x] `loadTunnels()` (:509): добавить гард `guard inFlightTunnels.isEmpty` после гарда `serviceState` (:510); переписать doc-комментарий — триггеры пополняются 5-с тиком («never in the 5-second tick» уходит), при in-flight операции запрос не выстраивается в очередь демона
+- [x] Doc-комментарии, ложные после появления тикового `state`: `TunnelInfo` (Model.swift:63–64 — «5-с тик его не переворачивает» уходит, список триггеров пополняется тиком), `inFlightTunnels` (:185–188 — «show-тик подавлен» → show- и state-тики подавлены), `updateRefreshItemEnabledState` (StatusItemController.swift:314 — «глушит show-тик» → оба тика)
+- [x] Тест (success): при `serviceState == .installed` без in-flight операции вызов `loadTunnels()` отправляет `state` (счётчик мока растёт) — существующий поток тестов дополняется прямым кейсом тикового вызова
+- [x] Тест (guard): имя в `inFlightTunnels` → `loadTunnels()` не отправляет `state` (счётчик не растёт); после завершения операции явный post-op `loadTunnels()` отправляет
+- [x] Гейт: `swift build` + `DEVELOPER_DIR=/Applications/Xcode.app/Contents/Developer swift test` — зелёный полный сьют
 
 ### Task 3: Документация
 

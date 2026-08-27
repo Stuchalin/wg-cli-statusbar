@@ -1096,6 +1096,74 @@ final class WGStatusBarTests: XCTestCase {
         XCTAssertFalse(model.isDataStale, "успешный тик снимает устарелость")
     }
 
+    /// Тиковый state: при живом демоне и без операции в полёте `loadTunnels()`
+    /// (тот же вызов, что в замыкании startTimer()) отправляет `state` и
+    /// переворачивает строку — туннель, опущенный в терминале, сходится без
+    /// переоткрытия меню.
+    func testTickDrivenLoadTunnelsSendsStateAndFlipsRow() {
+        let client = MockTunnelClient()
+        client.configure(stateResults: [
+            .success([TunnelState(name: "kvmka-ai", isUp: true, utun: "utun3")]),
+            .success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)]),
+        ])
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump(makeConnectedDump(interfaceName: "utun3"))),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: true)] },
+            "первый state должен заполнить tunnels"
+        )
+        XCTAssertEqual(client.stateCalls, 1, "предусловие: один state на заполнение")
+
+        model.loadTunnels()  // тик таймера: тот же путь, что замыкание startTimer()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "тиковый state должен перевернуть строку ●→○ без переоткрытия меню"
+        )
+        XCTAssertEqual(client.stateCalls, 2)
+    }
+
+    /// In-flight операция глушит и state-тик (симметрично show-тику): запрос
+    /// не выстраивается в очередь демона — op-бюджет до 9 c при
+    /// последовательном accept-loop, и ответ был бы отброшен latest-wins
+    /// поколением всё равно. Post-op `loadTunnels()` (тот же MainActor-блок,
+    /// что снимает имя) отправляет state как обычно.
+    func testInFlightTunnelSuppressesStateTickUntilOperationEnds() {
+        let client = MockTunnelClient()
+        client.configure(
+            stateResults: [.success([TunnelState(name: "kvmka-ai", isUp: false, utun: nil)])],
+            opResults: [.success(())],
+            gate: true
+        )
+        let model = makeInstalledModel(
+            showExecutor: CountingShowExecutor(dump: makeWireDump("")),
+            tunnelNamer: MockTunnelNamer(),
+            tunnelClient: client
+        )
+        model.loadTunnels()
+        waitUntil(
+            { model.tunnels == [TunnelInfo(name: "kvmka-ai", isUp: false)] },
+            "state должен заполнить tunnels"
+        )
+        XCTAssertEqual(client.stateCalls, 1, "предусловие: один state на заполнение")
+
+        model.toggleTunnel(named: "kvmka-ai")
+        waitUntil({ !client.upCalls.isEmpty }, "операция должна стартовать")
+
+        model.loadTunnels()  // тиковый state посреди операции
+        spinRunLoop()
+        XCTAssertEqual(client.stateCalls, 1, "in-flight операция не должна ставить state в очередь демона")
+
+        client.releaseGate()
+        waitUntil(
+            { model.inFlightTunnels.isEmpty && client.stateCalls == 2 },
+            "post-op loadTunnels обязан отправить state после завершения операции"
+        )
+    }
+
     /// Провал операции: one-tick lastFailure (локализованное сообщение), имя
     /// снято с inFlight, refresh НЕ зовётся (пролог refresh стирает
     /// lastFailure — ошибка не отрисовалась бы), туннели не чистятся.
