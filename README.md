@@ -39,6 +39,7 @@ If `wg` is missing, the card shows these commands with click-to-copy.
 make run                 # debug build + launch the app
 make release             # → build/WGStatusBar.app
 open build/WGStatusBar.app
+make install             # release + install the app into ~/Applications (quits and relaunches a running copy)
 make test                # full test suite
 make release VERSION=0.2.0
 ```
