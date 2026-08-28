@@ -32,7 +32,7 @@ APP="build/${APP_NAME}.app"
 DAEMON_SCRIPTS=(scripts/install-daemon.sh scripts/uninstall-daemon.sh)
 
 if [ ! -f "$ICON" ]; then
-    echo "error: $ICON not found; run scripts/make-icon.sh first" >&2
+    echo "error: $ICON not found" >&2
     exit 1
 fi
 
