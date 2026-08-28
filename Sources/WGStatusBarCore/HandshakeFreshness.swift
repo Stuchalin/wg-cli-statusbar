@@ -16,14 +16,6 @@ public enum HandshakeFreshness: Equatable {
     /// Старше — `stale`. Граница включительно.
     public static let agingThreshold: TimeInterval = 600
 
-    /// Пир считается активным (подключён), пока хендшейк `fresh` или `aging`.
-    public var isActive: Bool {
-        switch self {
-        case .fresh, .aging: return true
-        case .stale, .never: return false
-        }
-    }
-
     public static func freshness(date: Date?, now: Date = Date()) -> HandshakeFreshness {
         guard let date else { return .never }
         let age = now.timeIntervalSince(date)

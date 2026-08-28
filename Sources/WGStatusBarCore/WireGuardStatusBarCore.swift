@@ -183,7 +183,7 @@ public final class WireGuardStatusModel: ObservableObject {
     /// namer-резолв он больше не должен.
     private var stateInterfaceNames: [String: String] = [:]
     /// Имена туннелей с операцией в полёте (наличие имени = in-flight): строки
-    /// меню некликабельны, show-тик подавлен, снапшот не устаревает.
+    /// меню некликабельны, show- и state-тики подавлены, снапшот не устаревает.
     /// Отдельного состояния «failed» нет — ошибку несёт существующий one-tick
     /// `lastFailure`.
     @Published public private(set) var inFlightTunnels: Set<String> = []
@@ -277,12 +277,6 @@ public final class WireGuardStatusModel: ObservableObject {
         timer?.invalidate()
     }
 
-    /// Хотя бы один интерфейс подключён — правда по данным, безотносительно
-    /// свежести снапшота.
-    public var isAnyConnected: Bool {
-        interfaces.contains(where: \.isConnected)
-    }
-
     /// Данные устарели: снапшот непуст и последнему успешному тику прошло
     /// больше `stalenessLimit` (или успешных тиков не было — в продакшене
     /// недостижимо, `interfaces` пишет только успешный тик). Пустые данные —
@@ -299,10 +293,14 @@ public final class WireGuardStatusModel: ObservableObject {
         return now().timeIntervalSince(lastSuccessAt) > stalenessLimit
     }
 
-    /// Состояние иконки/VoiceOver: подключён И данные не устарели — замороженный
-    /// снапшот при потере источника не должен показывать «живой» щиток.
-    public var showsConnected: Bool {
-        isAnyConnected && !isDataStale
+    /// Состояние иконки/VoiceOver: туннель поднят (в ядре есть wg-интерфейс,
+    /// дамп непуст) И данные не устарели. Хендшейки и их свежесть — атрибут
+    /// карточки, щиток от них не зависит (поднятый туннель без трафика не
+    /// гаснет); замороженный снапшот при потере источника щиток не зажигает.
+    /// Проверка непустоты обязательна: пустой дамп «нечему устаревать»
+    /// (`isDataStale == false`) — без неё пустой дамп зажигал бы щиток.
+    public var showsTunnelUp: Bool {
+        !interfaces.isEmpty && !isDataStale
     }
 
     /// Строка ошибки для карточки, вычисляется из `lastFailure`; тип `String?`
@@ -320,10 +318,10 @@ public final class WireGuardStatusModel: ObservableObject {
         error as? StatusFailure ?? .generic(error.localizedDescription)
     }
 
-    /// Тайтл для VoiceOver: как и иконка, от `showsConnected` — устаревший
-    /// снапшот не озвучивается как «подключено».
+    /// Тайтл для VoiceOver: как и иконка, от `showsTunnelUp` — устаревший
+    /// снапшот не озвучивается как «туннель поднят».
     public var menuTitle: String {
-        showsConnected ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
+        showsTunnelUp ? L10n.string("menu.title.on") : L10n.string("menu.title.off")
     }
 
     /// `forceNameRescan` — принудительный рескан имён туннелей (кнопка «Обновить»);
@@ -496,18 +494,24 @@ public final class WireGuardStatusModel: ObservableObject {
     // MARK: - Туннели
 
     /// Подтягивает состояние туннелей демона (`state` → имена + isUp + маппинг
-    /// имён интерфейсов). Триггеры: открытие меню, ответ up/down, переход
-    /// serviceState при открытом меню — НЕ 5-секундный тик (тики `tunnels` не
-    /// переворачивают: состояние — данные демона, снапшот здесь не при делах).
-    /// Ошибки глотаются молча: данные меню оппортунистические, не источник
-    /// статуса (иначе dev-фолбэк без демона получал бы ложную ошибку на
-    /// карточке); строки и имена держат последнее известное. Ответ применяется
-    /// latest-wins (`loadTunnelsGeneration`): маппинг, переименование карточки
-    /// и `tunnels` — один снимок одного ответа, опоздавший ответ старого
+    /// имён интерфейсов). Триггеры: 5-секундный тик таймера, открытие меню,
+    /// ответ up/down, переход serviceState при открытом меню — туннель,
+    /// опущенный в терминале, переворачивает строку вживую (≤ 5 c), данные
+    /// меню не замерзают между открытиями. Ошибки глотаются молча: данные
+    /// меню оппортунистические, не источник статуса (иначе dev-фолбэк без
+    /// демона получал бы ложную ошибку на карточке); строки и имена держат
+    /// последнее известное. Ответ применяется latest-wins
+    /// (`loadTunnelsGeneration`): маппинг, переименование карточки и
+    /// `tunnels` — один снимок одного ответа, опоздавший ответ старого
     /// запроса отбрасывается целиком. До `.installed` демон не дёргается
-    /// вовсе: у старого build `state` — unknown command.
+    /// вовсе: у старого build `state` — unknown command. Туннельная операция
+    /// в полёте — запрос не отправляется вовсе (симметрично `refresh()`):
+    /// демон занят op-бюджетом (последовательный accept-loop), а ответ был бы
+    /// отброшен latest-wins поколением всё равно — триггер «после ответа
+    /// up/down» вернёт данные сам.
     public func loadTunnels() {
         guard serviceState == .installed else { return }
+        guard inFlightTunnels.isEmpty else { return }
         loadTunnelsGeneration += 1
         let generation = loadTunnelsGeneration
         let client = tunnelCommandRunner
@@ -523,7 +527,7 @@ public final class WireGuardStatusModel: ObservableObject {
                 self.stateInterfaceNames = mapping
                 // Первый путь записи displayName поверх namer'а: ответ state
                 // переименовывает карточку живьём (открытое меню), не дожидаясь
-                // 5-с тика.
+                // show-тика.
                 let renamed = Self.applyingStateInterfaceNames(mapping, to: self.interfaces)
                 if renamed != self.interfaces {
                     self.interfaces = renamed
@@ -596,13 +600,24 @@ public final class WireGuardStatusModel: ObservableObject {
         tunnels[index] = TunnelInfo(name: name, isUp: isUp)
     }
 
+    /// Тик каждые `refreshInterval` несёт и снапшот, и данные меню — строки
+    /// туннелей и маппинг имён не замерзают между открытиями меню. Оба вызова
+    /// с собственными гардами (in-flight операция, неустановленный демон) —
+    /// тихие no-op. Отдельный метод, а не тело замыкания, чтобы тестовая
+    /// точка входа совпадала с продакшн-точкой (сам `Timer` не тестируется —
+    /// конвенция проекта).
+    func tick() {
+        refresh()
+        loadTunnels()
+    }
+
     private func startTimer() {
         // .common, а не дефолтный режим run loop: пока открыто меню NSStatusItem,
         // главный run loop работает в NSEventTrackingRunLoopMode и таймер из
         // scheduledTimer стоит — карточка замирала бы на всё время открытого меню.
         let timer = Timer(timeInterval: refreshInterval, repeats: true) { [weak self] _ in
             Task { @MainActor [weak self] in
-                self?.refresh()
+                self?.tick()
             }
         }
         RunLoop.main.add(timer, forMode: .common)

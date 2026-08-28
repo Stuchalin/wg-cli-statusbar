@@ -42,25 +42,6 @@ final class HandshakeFreshnessTests: XCTestCase {
         XCTAssertEqual(HandshakeFreshness.freshness(date: handshake, now: now), .fresh)
     }
 
-    // MARK: - Семантика isActive (подключён)
-
-    func testFreshAndAgingCountAsActive() {
-        XCTAssertTrue(HandshakeFreshness.fresh.isActive)
-        XCTAssertTrue(HandshakeFreshness.aging.isActive)
-    }
-
-    func testStaleAndNeverAreNotActive() {
-        XCTAssertFalse(HandshakeFreshness.stale.isActive)
-        XCTAssertFalse(HandshakeFreshness.never.isActive)
-    }
-
-    func testIsActiveMatchesFreshnessFactory() {
-        let activeHandshake = now.addingTimeInterval(-5 * 60)
-        let staleHandshake = now.addingTimeInterval(-15 * 60)
-        XCTAssertTrue(HandshakeFreshness.freshness(date: activeHandshake, now: now).isActive)
-        XCTAssertFalse(HandshakeFreshness.freshness(date: staleHandshake, now: now).isActive)
-    }
-
     // MARK: - Классификация allowed ips
 
     func testIPv4DefaultRouteIsFullTunnel() {

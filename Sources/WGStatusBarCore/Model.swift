@@ -10,11 +10,6 @@ public struct WGInterface: Identifiable, Equatable {
     public var displayName: String
     public var peers: [WGPeer]
 
-    /// Подключён, если хоть один пир активен (хендшейк fresh|aging).
-    public var isConnected: Bool {
-        peers.contains { $0.isActive }
-    }
-
     public init(name: String, peers: [WGPeer], displayName: String? = nil) {
         self.id = name
         self.name = name
@@ -50,18 +45,13 @@ public struct WGPeer: Identifiable, Equatable {
         self.rxBytes = rxBytes
         self.txBytes = txBytes
     }
-
-    /// Пир активен, пока хендшейк свежий или стареющий (green|orange).
-    public var isActive: Bool {
-        HandshakeFreshness.freshness(date: latestHandshake).isActive
-    }
 }
 
 /// Туннель из конфигов wg-quick (демон, запрос `state`): имя = basename
 /// конфига. `isUp` — данные демона, а не вывод модели: `/var/run/wireguard`
 /// читаем только root, приложение состояние из дампа не выводит.
-/// Обновляется каждым ответом `state` (открытие меню, ответ up/down, переход
-/// serviceState) — 5-с тик его не переворачивает.
+/// Обновляется каждым ответом `state` (5-с тик, открытие меню, ответ up/down,
+/// переход serviceState) — снапшот интерфейсов его не переворачивает.
 public struct TunnelInfo: Equatable {
     public let name: String
     public let isUp: Bool
