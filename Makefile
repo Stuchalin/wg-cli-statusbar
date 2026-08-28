@@ -1,6 +1,6 @@
 VERSION ?= 0.1.0
 
-.PHONY: build run release test clean
+.PHONY: build run release install test clean
 
 build:
 	swift build
@@ -10,6 +10,9 @@ run: build
 
 release:
 	scripts/build-app.sh $(VERSION)
+
+install: release
+	scripts/install-app.sh
 
 # CLT ships no XCTest — point SwiftPM at Xcode's toolchain.
 test:

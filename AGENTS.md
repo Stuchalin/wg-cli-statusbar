@@ -12,6 +12,7 @@ WGStatusBar is a macOS menu-bar app (AppKit hybrid, macOS 13+, swift-tools 5.9) 
 make run                      # swift build + launch the app (dev)
 make build                    # debug build only (app + helper)
 make release                  # .app bundle via scripts/build-app.sh (VERSION ?= 0.1.0)
+make install                  # release + install into ~/Applications: quit → replace → relaunch (scripts/install-app.sh)
 make test                     # full suite (DEVELOPER_DIR wrapper, see below)
 .build/debug/WGStatusBar      # run the bare debug binary directly
 swift test --filter HandshakeFreshnessTests/testFreshnessRecentHandshakeIsFresh   # single test
