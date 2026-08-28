@@ -222,5 +222,5 @@ Not automatable — run on a machine with WireGuard configured after building th
 
 - The bundle is ad-hoc signed, which is enough to launch it locally on Apple Silicon. Developer ID signing, notarization and a universal build are future distribution work; `build-app.sh` is written to become the body of that CI job.
 - The SwiftPM resource bundle with localizations is copied to `Contents/Resources` (the standard location — codesign rejects anything in the `.app` root). `L10n` resolves it there; `Bundle.module` stays as the fallback for bare-binary dev runs.
-- The app icon is a generated placeholder: `scripts/make-icon.sh` redraws `Assets/AppIcon.icns` from `scripts/generate-icon.swift`. To swap in a designer icon, just replace `Assets/AppIcon.icns`.
+- The app icon is a hand-made asset: to swap in a different one, just overwrite `Assets/AppIcon.icns` — keep the corners outside the rounded square transparent (an opaque background shows up as a box in Finder/Dock; the committed icon carried opaque white corners until they were masked out).
 - Launched from Finder, the app runs as a regular user; use the menu's service item to install the daemon and get live data without sudo.
