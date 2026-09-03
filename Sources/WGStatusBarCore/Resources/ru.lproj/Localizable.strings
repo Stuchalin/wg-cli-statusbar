@@ -34,3 +34,13 @@
 "legend.fresh" = "Активен — хендшейк не старше 2 мин";
 "legend.aging" = "Простой — хендшейк 2–10 мин назад";
 "legend.stale" = "Не активен — хендшейка нет больше 10 мин";
+"config.auth.reason" = "показать скрытые ключи конфигурации WireGuard";
+"config.auth.cancel" = "Отмена";
+"config.reveal.error.service_install" = "Сначала установите службу-помощник из меню";
+"config.reveal.error.service_update" = "Сначала обновите службу-помощник из меню";
+"config.reveal.error.invalid_name" = "Недопустимое имя тоннеля";
+"config.reveal.error.helper_unavailable" = "Установленный хелпер отсутствует или небезопасен — переустановите сервис из меню";
+"config.reveal.error.helper_outdated" = "Установленный хелпер устарел — обновите сервис из меню";
+"config.reveal.error.auth_failed" = "Не удалось пройти аутентификацию — секреты не показаны";
+"config.reveal.error.auth_unavailable" = "Проверка владельца недоступна на этом Mac";
+"config.reveal.error.read_failed" = "Не удалось показать конфигурацию";

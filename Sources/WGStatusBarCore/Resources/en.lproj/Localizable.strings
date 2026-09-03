@@ -34,3 +34,13 @@
 "legend.fresh" = "Active — handshake within 2 min";
 "legend.aging" = "Idle — handshake 2–10 min ago";
 "legend.stale" = "Offline — handshake over 10 min ago";
+"config.auth.reason" = "reveal the hidden keys of the WireGuard configuration";
+"config.auth.cancel" = "Cancel";
+"config.reveal.error.service_install" = "Install the helper service from the menu first";
+"config.reveal.error.service_update" = "Update the helper service from the menu first";
+"config.reveal.error.invalid_name" = "This tunnel name is not valid";
+"config.reveal.error.helper_unavailable" = "The installed helper is missing or unsafe — reinstall the service from the menu";
+"config.reveal.error.helper_outdated" = "The installed helper is outdated — update the service from the menu";
+"config.reveal.error.auth_failed" = "Authentication failed — secrets were not revealed";
+"config.reveal.error.auth_unavailable" = "Owner authentication is unavailable on this Mac";
+"config.reveal.error.read_failed" = "Revealing the configuration failed";
