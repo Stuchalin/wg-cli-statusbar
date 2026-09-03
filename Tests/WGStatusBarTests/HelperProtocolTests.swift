@@ -256,6 +256,28 @@ final class HelperProtocolTests: XCTestCase {
         }
     }
 
+    func testEnvelopeRejectsNonCanonicalBase64() {
+        // Неканоничные хвосты: алфавит, длина и позиция `=` валидны, но
+        // неиспользуемые биты паддинга не нули — `AB==`/`AAB=` декодируются
+        // теми же байтами, что каноничные `AA==`/`AAA=`. Наш кодировщик
+        // порождает только каноничную форму, всё неканоничное — мусор канала.
+        let nonCanonical = ["AB==", "AP==", "AAB=", "AAF="]
+        for encoded in nonCanonical {
+            guard case .failure(.malformedBase64) = ConfigEnvelope.decode("b64:\(encoded)\n") else {
+                XCTFail("неканоничный base64 должен давать malformedBase64: \(encoded)")
+                continue
+            }
+        }
+        // Каноничные близнецы тех же байтов проходят — отсеивается именно
+        // неканоничность формы, а не сами байты.
+        for encoded in ["AA==", "AAA="] {
+            guard case .success = ConfigEnvelope.decode("b64:\(encoded)\n") else {
+                XCTFail("каноничный base64 должен разбираться: \(encoded)")
+                continue
+            }
+        }
+    }
+
     func testEnvelopeRejectsDecodedDataOverReaderLimit() {
         // Декодированное содержимое обязано влезать в лимит ридера: конверт
         // с большим телом — мусор канала, а не документ.
