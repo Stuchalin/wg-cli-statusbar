@@ -219,15 +219,15 @@ Files:
 - `Tests/WGStatusBarTests/SocketTunnelClientTests.swift`
 - `Tests/WGStatusBarTests/ConfigSecretFixture.swift` — new shared canary constant
 
-- [ ] Add `config <name>` and a detail-free config error while preserving every existing request encoding and response behavior.
-- [ ] Keep protocol version stable, increment helper build, and prove an old build maps to Update Service rather than a generic config failure.
-- [ ] Serve only safely read, sanitized, bounded text in one terminated `b64:` envelope; reject missing arguments, trailing arguments, unsafe files, and read failures without partial output, while round-tripping an empty document.
-- [ ] Implement a dedicated masked config client using the common deadline and version verification; enforce the encoded response limit during socket reads and decode the envelope without changing the sanitized document's own trailing-newline state.
-- [ ] Update both existing exhaustive client mappings for the config-only response code and pin their established defensive error behavior without changing public errors.
-- [ ] Test a real temporary socket round trip and assert the shared canary is absent from response bytes, parsed output, errors, and captured logs; test that an over-limit peer is rejected before further accumulation.
-- [ ] Acceptance: exhaustive protocol tests show there is no raw request; exact masked content with and without a source final newline round-trips; existing show/list/state/up/down clients compile, map the config-only error defensively, and remain compatible and green.
-- [ ] Validation: run `HelperProtocolTests`, `HelperDaemonTests`, `ConfigSocketTests`, `SocketTunnelClientTests`, and `SocketWGShowRunnerTests`.
-- [ ] run tests - must pass before next task
+- [x] Add `config <name>` and a detail-free config error while preserving every existing request encoding and response behavior.
+- [x] Keep protocol version stable, increment helper build, and prove an old build maps to Update Service rather than a generic config failure.
+- [x] Serve only safely read, sanitized, bounded text in one terminated `b64:` envelope; reject missing arguments, trailing arguments, unsafe files, and read failures without partial output, while round-tripping an empty document.
+- [x] Implement a dedicated masked config client using the common deadline and version verification; enforce the encoded response limit during socket reads and decode the envelope without changing the sanitized document's own trailing-newline state.
+- [x] Update both existing exhaustive client mappings for the config-only response code and pin their established defensive error behavior without changing public errors.
+- [x] Test a real temporary socket round trip and assert the shared canary is absent from response bytes, parsed output, errors, and captured logs; test that an over-limit peer is rejected before further accumulation.
+- [x] Acceptance: exhaustive protocol tests show there is no raw request; exact masked content with and without a source final newline round-trips; existing show/list/state/up/down clients compile, map the config-only error defensively, and remain compatible and green.
+- [x] Validation: run `HelperProtocolTests`, `HelperDaemonTests`, `ConfigSocketTests`, `SocketTunnelClientTests`, and `SocketWGShowRunnerTests`.
+- [x] run tests - must pass before next task
 
 ### Task 3: Add authenticated one-shot raw reading
 

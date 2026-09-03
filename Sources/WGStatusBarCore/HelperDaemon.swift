@@ -97,6 +97,9 @@ public final class DaemonServer {
     /// Ридер живого состояния `/var/run/wireguard` для запроса `state`
     /// (без собственного кэша — скан на каждый запрос).
     private let runtimeReader: WireGuardRuntimeReader
+    /// Безопасный ридер файлов конфигов для запроса `config` (маскированный
+    /// просмотр): резолв по порядку каталогов + дескрипторное чтение с лимитом.
+    private let configReader: TunnelConfigReader
     private let cancelFlag = CancelFlag()
 
     /// Максимальная длина строки команды: запросы крошечные, мусор без `\n`
@@ -110,13 +113,16 @@ public final class DaemonServer {
     ///   - tunnelExecutor: исполнитель `up`/`down` (стаб в тестах).
     ///   - runtimeReader: ридер пар `.name`/`.sock` для `state` (фейковый FS
     ///     в тестах).
+    ///   - configReader: безопасный ридер конфигов для `config` (по умолчанию
+    ///     — продакшн-ридер над общими путями поиска; фейковый FS в тестах).
     public init(
         executor: WGShowExecuting,
         socketPath: String,
         readDeadline: TimeInterval = 5,
         configStore: TunnelConfigStore = TunnelConfigStore(),
         tunnelExecutor: WGQuickExecuting = WGQuickExecutor(),
-        runtimeReader: WireGuardRuntimeReader = WireGuardRuntimeReader()
+        runtimeReader: WireGuardRuntimeReader = WireGuardRuntimeReader(),
+        configReader: TunnelConfigReader = TunnelConfigReader()
     ) {
         self.executor = executor
         self.socketPath = socketPath
@@ -124,6 +130,7 @@ public final class DaemonServer {
         self.configStore = configStore
         self.tunnelExecutor = tunnelExecutor
         self.runtimeReader = runtimeReader
+        self.configReader = configReader
     }
 
     public func run() async throws {
@@ -277,6 +284,11 @@ public final class DaemonServer {
         case "up", "down":
             // Отсутствующий аргумент — пустое имя: валидация его не пропустит.
             await serveTunnel(command: head, name: argument ?? "", to: clientFD)
+        case "config":
+            // Как у up/down: отсутствующий аргумент — пустое имя, лишние слова
+            // становятся частью имени — оба отсекаются валидацией ридера
+            // (invalidName → config-unavailable), без частичного ответа.
+            await serveConfig(name: argument ?? "", to: clientFD)
         default:
             // Разрыв после ответа: протокол — одно соединение = один запрос.
             _ = await Self.writeResponse(
@@ -358,6 +370,25 @@ public final class DaemonServer {
             response = Self.tunnelErrResponse(command: command, name: name, for: error)
         }
         // Клиент мог уйти, пока шла операция: провал записи — не ошибка цикла.
+        _ = await Self.writeResponse(fd: clientFD, text: response, deadline: readDeadline)
+    }
+
+    /// `config <name>`: безопасное чтение файла (резолв по порядку каталогов,
+    /// no-follow, регулярность, лимит, полный UTF-8) → санитизация значений
+    /// канонических назначений ключей → один `b64:`-конверт. Любая ошибка
+    /// чтения — `err config-unavailable` без детали и без payload: ни
+    /// содержимое, ни путь не покидают демон, частичного документа не бывает.
+    /// Чтение локально и ограничено лимитом ридера — наблюдатель EOF клиента
+    /// (как у show) не нужен; клиент, ушедший до ответа, терпит провал записи,
+    /// цикл продолжает работать.
+    private func serveConfig(name: String, to clientFD: Int32) async {
+        let response: String
+        switch configReader.readConfig(named: name) {
+        case .success(let document):
+            response = Self.okResponse(dump: ConfigEnvelope.encode(sanitizeWGQuickConfig(document.text)))
+        case .failure:
+            response = Self.errResponse(code: "config-unavailable", detail: nil)
+        }
         _ = await Self.writeResponse(fd: clientFD, text: response, deadline: readDeadline)
     }
 

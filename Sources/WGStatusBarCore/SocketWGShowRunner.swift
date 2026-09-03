@@ -101,10 +101,11 @@ public struct SocketWGShowRunner: WGShowCommandRunning {
         case .err(_, _, .wgFailed, let detail):
             // Демон всегда прикладывает деталь; пустая — деградируем в общую строку.
             throw StatusFailure.generic(detail ?? L10n.string("error.service_unreachable"))
-        case .err(_, _, .quickMissing, _), .err(_, _, .tunnelNotFound, _):
-            // Коды туннельных операций (list/up/down) не отвечают `show` — их
-            // маппинг живёт в `SocketTunnelClient`; защитная ветка исчерпывающего
-            // switch для нештатного демона.
+        case .err(_, _, .quickMissing, _), .err(_, _, .tunnelNotFound, _),
+             .err(_, _, .configUnavailable, _):
+            // Коды туннельных операций (list/up/down) и просмотра конфига
+            // (config) не отвечают `show` — их маппинг живёт в своих клиентах;
+            // защитные ветки исчерпывающего switch для нештатного демона.
             throw StatusFailure.generic(L10n.string("error.service_unreachable"))
         }
     }

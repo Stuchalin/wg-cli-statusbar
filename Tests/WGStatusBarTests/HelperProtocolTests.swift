@@ -106,6 +106,19 @@ final class HelperProtocolTests: XCTestCase {
         )
     }
 
+    func testDecodeErrConfigUnavailable() {
+        // Контракт демона — код без детали; decode умеет и вариант с ней
+        // (клиент просмотра деталь игнорирует — закреплено его тестами).
+        XCTAssertEqual(
+            decode(response: "err 1 18 config-unavailable\n"),
+            .err(protocolVersion: 1, build: 18, code: .configUnavailable, detail: nil)
+        )
+        XCTAssertEqual(
+            decode(response: "err 1 18 config-unavailable leaked detail\n"),
+            .err(protocolVersion: 1, build: 18, code: .configUnavailable, detail: "leaked detail")
+        )
+    }
+
     // MARK: - decode: мусор → nil
 
     func testDecodeMalformedResponseReturnsNil() {
@@ -125,8 +138,11 @@ final class HelperProtocolTests: XCTestCase {
             "err abc 5 wg-missing",
             "err 1 xyz wg-failed",
             "err 1 9 wgquick-missing\n", // опечатка в wire-имени нового кода
+            "err 1 18 configunavailable\n", // опечатка в wire-имени кода config
+            "err 1 18 config-unavailable-extra\n", // мусорный хвост в коде
             "ok 1 5 wg-missing\nline", // код ошибки в ok-заголовке — мусор
             "ok 1 9 tunnel-not-found\nline",
+            "ok 1 18 config-unavailable\nline",
         ]
         for response in malformed {
             XCTAssertNil(
@@ -176,11 +192,89 @@ final class HelperProtocolTests: XCTestCase {
         XCTAssertEqual(encode(.state), "state\n")
     }
 
+    func testEncodeConfigRequest() {
+        XCTAssertEqual(encode(.config("work-vpn")), "config work-vpn\n")
+    }
+
+    func testEncodeIsExhaustiveOverRequestCases() {
+        // Свитч encode исчерпывающий: raw-запроса в протоколе нет — enum
+        // содержит show/list/state/up/down/config, и все шесть кодируются.
+        // Появление седьмого кейса сломает компиляцию свитча, а не молчание.
+        let requests: [HelperRequest] = [.show, .list, .state, .up("a"), .down("b"), .config("c")]
+        XCTAssertEqual(
+            Set(requests.map(encode)),
+            Set(["show\n", "list\n", "state\n", "up a\n", "down b\n", "config c\n"])
+        )
+    }
+
     // MARK: - Константы версий
 
     func testVersionConstantsArePositive() {
         // Оба числа уходят в wire-заголовок — стартуют с 1 и только растут.
         XCTAssertGreaterThan(helperProtocolVersion, 0)
         XCTAssertGreaterThan(helperBuildNumber, 0)
+    }
+
+    // MARK: - Конверт b64
+
+    func testEnvelopeRoundTripsExactTextWithAndWithoutFinalNewline() {
+        for text in ["[Interface]\nPrivateKey = abc\n", "[Interface]\nListenPort = 51820", ""] {
+            let payload = ConfigEnvelope.encode(text)
+            switch ConfigEnvelope.decode(payload) {
+            case .success(let decoded):
+                XCTAssertEqual(decoded, text, "текст проходит конверт байт-в-байт")
+            case .failure(let error):
+                XCTFail("конверт должен разбираться для \(text.debugDescription): \(error)")
+            }
+        }
+    }
+
+    func testEnvelopeEncodesEmptyDocumentAsBareTag() {
+        // Пустой документ — валидный конверт `b64:\n` (base64 пустоты пуст),
+        // а не отсутствующий payload: пустой файл отличим от «нет ответа».
+        XCTAssertEqual(ConfigEnvelope.encode(""), "b64:\n")
+    }
+
+    func testEnvelopeRejectsAbsentTagExtraLinesAndMalformedBase64() {
+        let badPayloads = [
+            "", // конверта нет
+            "b64:", // без терминатора — усечён
+            "AAAA\n", // нет тега
+            "b64:AAAA\nAAAA\n", // вторая строка payload
+            "b64:AA\nAA\n", // \n внутри закодированной части
+            "b64:AAA\rAA\n", // \r внутри закодированной части
+            "b64:AAA\n", // длина не кратна 4
+            "b64:AA=A\n", // = в середине
+            "b64:====\n", // больше двух =
+            "b64:AA A\n", // пробел — не алфавит
+            "b64:AAAA-\n", // urlsafe-символ — не алфавит
+        ]
+        for payload in badPayloads {
+            if case .success = ConfigEnvelope.decode(payload) {
+                XCTFail("конверт должен быть отвергнут: \(payload.debugDescription)")
+            }
+        }
+    }
+
+    func testEnvelopeRejectsDecodedDataOverReaderLimit() {
+        // Декодированное содержимое обязано влезать в лимит ридера: конверт
+        // с большим телом — мусор канала, а не документ.
+        let oversized = String(
+            repeating: "A",
+            count: TunnelConfigReader.maxSizeBytes + 1
+        )
+        guard case .failure(.oversized) = ConfigEnvelope.decode(ConfigEnvelope.encode(oversized)) else {
+            XCTFail("конверт сверх лимита ридера должен давать oversized")
+            return
+        }
+    }
+
+    func testEnvelopeRejectsInvalidUTF8Payload() {
+        // Валидный base64 из невалидного UTF-8: документом быть не может.
+        let invalid = Data([0x41, 0xFF, 0x42]).base64EncodedString()
+        guard case .failure(.invalidUTF8) = ConfigEnvelope.decode("b64:\(invalid)\n") else {
+            XCTFail("не-UTF8 тело конверта должно давать invalidUTF8")
+            return
+        }
     }
 }

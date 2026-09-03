@@ -113,6 +113,10 @@ public struct SocketTunnelClient {
             // шлёт (wg-quick зовёт wg внутри — его отсутствие = wg-failed).
             // Защитная ветка исчерпывающего switch: истина «wg не установлен».
             throw StatusFailure.wgMissing
+        case .err(_, _, .configUnavailable, _):
+            // Код просмотра конфига не отвечает туннельным операциям —
+            // защитная ветка исчерпывающего switch для нештатного демона.
+            throw StatusFailure.generic(L10n.string("error.service_unreachable"))
         }
     }
 

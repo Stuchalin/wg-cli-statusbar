@@ -268,10 +268,10 @@ final class SocketWGShowRunnerTests: XCTestCase {
     }
 
     func testTunnelOpCodesWithMatchingVersionsMapToGenericUnreachable() async throws {
-        // Защитные ветки interpret: коды list/up/down не отвечают show, но при
-        // совпадающих версиях маппятся в общую строку недоступности, а не в
-        // daemonOutdated (сверка версий тут уже прошла).
-        for code in ["wg-quick-missing", "tunnel-not-found"] {
+        // Защитные ветки interpret: коды list/up/down/config не отвечают show,
+        // но при совпадающих версиях маппятся в общую строку недоступности, а
+        // не в daemonOutdated (сверка версий тут уже прошла).
+        for code in ["wg-quick-missing", "tunnel-not-found", "config-unavailable"] {
             let socketPath = makeSocketPath()
             try serveOneConnection(
                 path: socketPath,
