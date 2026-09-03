@@ -194,14 +194,14 @@ Files:
 - `Tests/WGStatusBarTests/TunnelConfigReaderTests.swift` — new
 - `Tests/WGStatusBarTests/ConfigSanitizerTests.swift` — new
 
-- [ ] Expose one shared name-shape decision without changing existing `names()`/`validate(_:)` behavior.
-- [ ] Implement ordered resolution and descriptor-safe read with no-follow, regular-file verification, `256 KiB` bound, complete UTF-8 decode, exact preservation of final-newline presence, and typed non-content errors.
-- [ ] Fail on an unsafe first-priority duplicate; do not fall through to another directory.
-- [ ] Implement key-assignment masking while preserving comments, hooks, unknown directives, blank lines, and non-key content.
-- [ ] Test success, empty file, search precedence, duplicate handling, invalid name, not found, symlink/race model, special file, permissions/read error, interrupted read, exact limit/over-limit, invalid UTF-8, missing final newline, and sanitizer false positives.
-- [ ] Acceptance: no error contains config text; safe and raw reads share one reader contract; existing config listing/toggle tests remain unchanged and green.
-- [ ] Validation: run `TunnelConfigReaderTests`, `ConfigSanitizerTests`, `TunnelConfigStoreTests`, then `git diff --check`.
-- [ ] run tests - must pass before next task
+- [x] Expose one shared name-shape decision without changing existing `names()`/`validate(_:)` behavior.
+- [x] Implement ordered resolution and descriptor-safe read with no-follow, regular-file verification, `256 KiB` bound, complete UTF-8 decode, exact preservation of final-newline presence, and typed non-content errors.
+- [x] Fail on an unsafe first-priority duplicate; do not fall through to another directory.
+- [x] Implement key-assignment masking while preserving comments, hooks, unknown directives, blank lines, and non-key content.
+- [x] Test success, empty file, search precedence, duplicate handling, invalid name, not found, symlink/race model, special file, permissions/read error, interrupted read, exact limit/over-limit, invalid UTF-8, missing final newline, and sanitizer false positives.
+- [x] Acceptance: no error contains config text; safe and raw reads share one reader contract; existing config listing/toggle tests remain unchanged and green.
+- [x] Validation: run `TunnelConfigReaderTests`, `ConfigSanitizerTests`, `TunnelConfigStoreTests`, then `git diff --check`.
+- [x] run tests - must pass before next task
 
 ### Task 2: Add masked config transport through the daemon
 
