@@ -36,7 +36,8 @@ final class HelperDaemonTests: XCTestCase {
             fileSystem: FileManagerTunnelConfigFileSystem()
         ),
         tunnelExecutor: WGQuickExecuting = StubTunnelExecutor(),
-        runtimeReader: WireGuardRuntimeReader? = nil
+        runtimeReader: WireGuardRuntimeReader? = nil,
+        configReader: TunnelConfigReader? = nil
     ) async throws {
         let server = DaemonServer(
             executor: executor,
@@ -47,7 +48,8 @@ final class HelperDaemonTests: XCTestCase {
             // Дефолт — пустой псевдокаталог `/var/run/wireguard`: настоящая
             // машина не должна протекать в тесты (по образцу
             // SocketTunnelClientTests.startServer).
-            runtimeReader: runtimeReader ?? makeRuntimeReader(StubRuntimeFileSystem())
+            runtimeReader: runtimeReader ?? makeRuntimeReader(StubRuntimeFileSystem()),
+            configReader: configReader ?? makeConfigReader(FakeReaderFileSystem())
         )
         serverTask = Task.detached { try await server.run() }
         // Файл сокета появляется на bind — раньше accept-цикла.
@@ -179,6 +181,51 @@ final class HelperDaemonTests: XCTestCase {
 
     private func makeRuntimeReader(_ fileSystem: WireGuardTunnelNameFileSystem) -> WireGuardRuntimeReader {
         WireGuardRuntimeReader(fileSystem: fileSystem)
+    }
+
+    // MARK: - Фикстуры запроса config
+
+    /// Фейковый FS ридера конфигов: исходы открытия по точному пути
+    /// (по образцу TunnelConfigReaderTests).
+    private final class FakeReaderFileSystem: TunnelConfigReaderFileSystem {
+        var outcomes: [String: TunnelConfigOpenOutcome] = [:]
+
+        func openFileNoFollow(atPath path: String) -> TunnelConfigOpenOutcome {
+            outcomes[path] ?? .notFound
+        }
+    }
+
+    /// Фейковый дескриптор: содержимое целиком, флаг регулярности.
+    private final class FakeReaderFileHandle: TunnelConfigReaderFileHandle {
+        private let content: [UInt8]
+        private var offset = 0
+        var regular = true
+
+        init(content: [UInt8]) {
+            self.content = content
+        }
+
+        var isRegularFile: Bool { regular }
+
+        func read(into buffer: UnsafeMutableRawPointer, maxLength: Int) -> TunnelConfigReadChunk {
+            guard offset < content.count else { return .endOfFile }
+            let count = min(maxLength, content.count - offset)
+            content.withUnsafeBytes { raw in
+                _ = memcpy(buffer, raw.baseAddress!.advanced(by: offset), count)
+            }
+            offset += count
+            return .bytes(count)
+        }
+
+        func close() {}
+    }
+
+    private func makeConfigReader(_ fs: FakeReaderFileSystem) -> TunnelConfigReader {
+        TunnelConfigReader(searchPaths: [StubConfigFileSystem.directory], fileSystem: fs)
+    }
+
+    private func configFilePath(_ name: String) -> String {
+        StubConfigFileSystem.directory + "/" + name + ".conf"
     }
 
     /// Вызов туннельного исполнителя для ассертов (кортежи не Equatable).
@@ -581,6 +628,140 @@ final class HelperDaemonTests: XCTestCase {
 
         let list = try XCTUnwrap(decode(response: performExchange(encode(.list)).response))
         XCTAssertEqual(list, .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: "kvmka-ai\n"))
+    }
+
+    // MARK: - config → маскированный конверт
+
+    func testConfigReturnsSanitizedEnvelope() async throws {
+        // Канарейка — только в значениях назначений ключей; санитизация
+        // обязана спрятать оба до того, как байты покинут демон.
+        let raw = "[Interface]\n"
+            + "PrivateKey = \(configSecretCanary)\n"
+            + "ListenPort = 51820\n"
+            + "# комментарий: \(configSecretCanary)\n"
+            + "[Peer]\n"
+            + "PresharedKey = \(configPresharedCanary)\n"
+            + "PostUp = echo \(configSecretCanary)\n"
+            + "UnknownDirective = \(configSecretCanary)\n"
+        let fs = FakeReaderFileSystem()
+        fs.outcomes[configFilePath("kvmka-ai")] = .opened(
+            FakeReaderFileHandle(content: Array(raw.utf8))
+        )
+        try await startServer(executor: StubExecutor(), configReader: makeConfigReader(fs))
+
+        let exchange = try performExchange(encode(.config("kvmka-ai")))
+        let response = try XCTUnwrap(
+            decode(response: exchange.response),
+            "config должен отвечать ok-конвертом, а не разрывом"
+        )
+
+        let expectedPayload = ConfigEnvelope.encode(sanitizeWGQuickConfig(raw))
+        XCTAssertEqual(
+            response,
+            .ok(protocolVersion: helperProtocolVersion, build: helperBuildNumber, dump: expectedPayload),
+            "payload — один b64-конверт санированного текста, заголовок — версии из констант"
+        )
+        // Fail-closed: сырой ответ не несёт ни приватную, ни preshared-канарейку.
+        XCTAssertFalse(exchange.response.contains(configSecretCanary), "private key не должен попасть в ответ")
+        XCTAssertFalse(exchange.response.contains(configPresharedCanary), "preshared key не должен попасть в ответ")
+    }
+
+    func testConfigRoundTripsEmptyDocument() async throws {
+        // Пустой файл — валидный конверт `b64:\n`: пустой документ отличим от
+        // отсутствующего ответа.
+        let fs = FakeReaderFileSystem()
+        fs.outcomes[configFilePath("kvmka-ai")] = .opened(FakeReaderFileHandle(content: []))
+        try await startServer(executor: StubExecutor(), configReader: makeConfigReader(fs))
+
+        let exchange = try performExchange(encode(.config("kvmka-ai")))
+        XCTAssertEqual(
+            exchange.response,
+            Self.okResponseText(dump: "b64:\n"),
+            "пустой документ — ok с голым тегом конверта"
+        )
+    }
+
+    func testConfigPreservesDocumentWithoutFinalNewline() async throws {
+        // Терминатор конверта — обрамление транспорта; собственный `\n`
+        // документа живёт внутри base64 и не появляется из ниоткуда.
+        let raw = "[Interface]\nListenPort = 51820"
+        let fs = FakeReaderFileSystem()
+        fs.outcomes[configFilePath("kvmka-ai")] = .opened(
+            FakeReaderFileHandle(content: Array(raw.utf8))
+        )
+        try await startServer(executor: StubExecutor(), configReader: makeConfigReader(fs))
+
+        let exchange = try performExchange(encode(.config("kvmka-ai")))
+        let response = try XCTUnwrap(decode(response: exchange.response))
+        guard case .ok(_, _, let payload) = response else {
+            XCTFail("ожидался ok-ответ, получен \(response)")
+            return
+        }
+        guard case .success(let text) = ConfigEnvelope.decode(payload) else {
+            XCTFail("конверт должен разбираться: \(payload.debugDescription)")
+            return
+        }
+        XCTAssertEqual(text, raw, "отсутствие завершающего \\n сохраняется точно")
+    }
+
+    func testConfigWithoutArgumentAndWithTrailingArgumentsIsRejected() async throws {
+        // Отсутствующий аргумент — пустое имя, лишние слова — часть имени:
+        // оба не проходят валидацию ридера и дают err без детали и payload.
+        let bogusRequests = ["config\n", "config one two\n"]
+        let fs = FakeReaderFileSystem()
+        fs.outcomes[configFilePath("kvmka-ai")] = .opened(
+            FakeReaderFileHandle(content: Array("[Interface]\n".utf8))
+        )
+        try await startServer(executor: StubExecutor(), configReader: makeConfigReader(fs))
+
+        for request in bogusRequests {
+            let exchange = try performExchange(request)
+            XCTAssertEqual(
+                exchange.response,
+                Self.errResponseText(code: "config-unavailable"),
+                "для запроса \(request)"
+            )
+        }
+    }
+
+    func testConfigReaderFailuresMapToErrConfigUnavailableWithoutPartialOutput() async throws {
+        // Все исходы «читать нельзя» — один деталь-фри код: ни содержимое, ни
+        // путь, ни частичный документ не покидают демон.
+        let fs = FakeReaderFileSystem()
+        fs.outcomes[configFilePath("symlinked")] = .symlink
+        fs.outcomes[configFilePath("unreadable")] = .unreadable
+        let irregular = FakeReaderFileHandle(content: Array("fifo\n".utf8))
+        irregular.regular = false
+        fs.outcomes[configFilePath("special")] = .opened(irregular)
+        fs.outcomes[configFilePath("huge")] = .opened(
+            FakeReaderFileHandle(content: [UInt8](repeating: 0x61, count: TunnelConfigReader.maxSizeBytes + 1))
+        )
+        fs.outcomes[configFilePath("binary")] = .opened(FakeReaderFileHandle(content: [0x41, 0xFF]))
+        try await startServer(executor: StubExecutor(), configReader: makeConfigReader(fs))
+
+        let bogusNames = [
+            "symlinked", "unreadable", "special", "huge", "binary", // небезопасные файлы
+            "nosuch", // файла нет
+            "bad name", "../etc/passwd", "abcdefghijklmnop", // имя мимо shape-правила
+        ]
+        for name in bogusNames {
+            let exchange = try performExchange(encode(.config(name)))
+            XCTAssertEqual(
+                exchange.response,
+                Self.errResponseText(code: "config-unavailable"),
+                "для имени \(name)"
+            )
+        }
+    }
+
+    /// Готовый err-ответ для строковых ассертов: версии из констант, без детали.
+    private static func errResponseText(code: String) -> String {
+        "err \(helperProtocolVersion) \(helperBuildNumber) \(code)\n"
+    }
+
+    /// Готовый ok-ответ для строковых ассертов: версии из констант + payload.
+    private static func okResponseText(dump: String) -> String {
+        "ok \(helperProtocolVersion) \(helperBuildNumber)\n\(dump)"
     }
 
     // MARK: - up/down → ok без payload

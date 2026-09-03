@@ -82,7 +82,7 @@ public struct TunnelConfigStore {
             else { continue }
             for entry in entries where entry.hasSuffix(".conf") {
                 let name = String(entry.dropLast(".conf".count))
-                guard isNameShapeValid(name), seen.insert(name).inserted else { continue }
+                guard Self.isNameShapeValid(name), seen.insert(name).inserted else { continue }
             }
         }
         return seen.sorted()
@@ -95,10 +95,13 @@ public struct TunnelConfigStore {
     /// presence отсекает имена, для которых скрипт гарантированно умрёт
     /// с «No such file or directory».
     public func validate(_ name: String) -> Bool {
-        isNameShapeValid(name) && names().contains(name)
+        Self.isNameShapeValid(name) && names().contains(name)
     }
 
-    private func isNameShapeValid(_ name: String) -> Bool {
-        name.range(of: Self.wgQuickNamePattern, options: .regularExpression) != nil
+    /// Единое решение о форме имени, общее для стора и `TunnelConfigReader`:
+    /// ридер конфига обязан отсекать те же имена, что не примет wg-quick,
+    /// иначе путь к файлу собирался бы из непроверенного аргумента.
+    public static func isNameShapeValid(_ name: String) -> Bool {
+        name.range(of: wgQuickNamePattern, options: .regularExpression) != nil
     }
 }

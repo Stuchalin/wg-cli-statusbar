@@ -509,6 +509,22 @@ final class SocketTunnelClientTests: XCTestCase {
         await assertThrowsStatusFailure(.wgMissing) { try await client.up("kvmka-ai") }
     }
 
+    func testConfigCodeWithMatchingVersionsMapsToGenericUnreachable() async throws {
+        // Защитная ветка исчерпывающего switch: код просмотра конфига не
+        // отвечает туннельным операциям — общая строка недоступности, как у
+        // show-клиента; публичный контракт StatusFailure не меняется.
+        let socketPath = makeSocketPath()
+        try serveOneConnection(
+            path: socketPath,
+            response: "err \(helperProtocolVersion) \(helperBuildNumber) config-unavailable\n"
+        )
+
+        let client = SocketTunnelClient(socketPath: socketPath)
+        await assertThrowsStatusFailure(.generic(L10n.string("error.service_unreachable"))) {
+            try await client.up("kvmka-ai")
+        }
+    }
+
     func testTunnelKeysExistInBothLocalizations() throws {
         // Гигиена: отсутствие ключа в таблице не ловится ничем другим — UI
         // показал бы сырой ключ вместо строки.

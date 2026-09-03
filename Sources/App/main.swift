@@ -22,7 +22,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             model?.refresh()
         }
         installer.onFailure = { [weak model] message in model?.reportServiceFailure(message) }
-        statusItemController = StatusItemController(model: model, installer: installer)
+        // Вьювер конфига: зависимости собираются здесь (владение), логика —
+        // в core-типах. Провайдер состояния сервиса отдаёт уже выведенное
+        // моделью значение — Reveal гасится fail-closed до любых промптов,
+        // если демон не установлен/сломан/устарел.
+        let viewerModel = ConfigViewerModel(
+            maskedReader: SocketConfigClient(),
+            revealExecutor: PrivilegedConfigReader(),
+            serviceStateProvider: { [weak model] in model?.serviceState ?? .absent }
+        )
+        let viewerController = ConfigViewerController(model: viewerModel)
+        statusItemController = StatusItemController(model: model, installer: installer, configViewer: viewerController)
     }
 }
 

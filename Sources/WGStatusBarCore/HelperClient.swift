@@ -32,7 +32,14 @@ struct HelperClient {
 
     /// Полный обмен: ответ демона сырым текстом. poll/connect/recv блокируют
     /// поток — уходят с кооперативного пула в глобальную очередь.
-    func exchange(_ request: HelperRequest, timeout: TimeInterval) async throws -> String {
+    /// `responseLimit` — потолок байт ответа, проверяемый по ходу recv, до
+    /// накопления (клиент `config` ограничивает конверт; остальные вызовы
+    /// живут как раньше — без лимита).
+    func exchange(
+        _ request: HelperRequest,
+        timeout: TimeInterval,
+        responseLimit: Int? = nil
+    ) async throws -> String {
         let socketPath = self.socketPath
         // Запрос кодируется заранее: в блокирующий поток уходят только строки.
         let requestText = encode(request)
@@ -43,7 +50,8 @@ struct HelperClient {
                         returning: try Self.exchangeBlocking(
                             requestText: requestText,
                             socketPath: socketPath,
-                            timeout: timeout
+                            timeout: timeout,
+                            responseLimit: responseLimit
                         )
                     )
                 } catch {
@@ -56,7 +64,8 @@ struct HelperClient {
     private static func exchangeBlocking(
         requestText: String,
         socketPath: String,
-        timeout: TimeInterval
+        timeout: TimeInterval,
+        responseLimit: Int?
     ) throws -> String {
         let deadline = Date().addingTimeInterval(timeout)
 
@@ -69,7 +78,7 @@ struct HelperClient {
 
         try connectToDaemon(fd: fd, socketPath: socketPath, deadline: deadline)
         try sendAll(fd: fd, text: requestText, deadline: deadline)
-        return try readToEOF(fd: fd, deadline: deadline)
+        return try readToEOF(fd: fd, deadline: deadline, limit: responseLimit)
     }
 
     // MARK: - Сокет-операции под дедлайном (poll-затем-операция, как в DaemonServer)
@@ -134,7 +143,7 @@ struct HelperClient {
         }
     }
 
-    private static func readToEOF(fd: Int32, deadline: Date) throws -> String {
+    private static func readToEOF(fd: Int32, deadline: Date, limit: Int?) throws -> String {
         var data: [UInt8] = []
         while true {
             let remaining = deadline.timeIntervalSinceNow
@@ -153,6 +162,12 @@ struct HelperClient {
             if received == 0 { break } // EOF: демон закрыл соединение после ответа.
             if received < 0 {
                 if errno == EINTR { continue }
+                throw HelperClientError.badChannel
+            }
+            // Потолок проверяется до накопления: разросшийся ответ — это
+            // разлад канала (демон не может прислать больше легитимного
+            // максимума), дальше он не читается и не копится в память.
+            if let limit, data.count + received > limit {
                 throw HelperClientError.badChannel
             }
             data.append(contentsOf: chunk[0..<received])

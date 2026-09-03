@@ -157,6 +157,38 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(installer.uninstallCount, 0)
     }
 
+    // MARK: - Вьювер конфига: открытие из строки туннеля
+
+    /// Кнопка деталей: сначала закрывается трекинг меню, только затем вьювер
+    /// получает имя — окно активируется и забирает фокус, меню ему мешает.
+    func testPresentConfigViewerCancelsMenuTrackingBeforeShowing() {
+        var order: [String] = []
+        final class OrderRecordingViewer: ConfigViewing {
+            let onShow: (String) -> Void
+            init(onShow: @escaping (String) -> Void) { self.onShow = onShow }
+            func showConfig(named name: String) { onShow(name) }
+        }
+        let viewer = OrderRecordingViewer { name in order.append("show:\(name)") }
+
+        StatusItemController.presentConfigViewer(named: "kvmka-ai", viewer: viewer) {
+            order.append("cancel")
+        }
+
+        XCTAssertEqual(order, ["cancel", "show:kvmka-ai"], "трекинг меню закрывается до показа")
+    }
+
+    /// Без вьювера (nil) клик по деталям — тихий no-op: ни закрытия меню,
+    /// ни вызова.
+    func testPresentConfigViewerWithoutViewerIsSilentNoOp() {
+        var cancelCount = 0
+
+        StatusItemController.presentConfigViewer(named: "kvmka-ai", viewer: nil) {
+            cancelCount += 1
+        }
+
+        XCTAssertEqual(cancelCount, 0, "без вьювера меню не закрывается")
+    }
+
     /// Туннельный клиент с клапаном: up/down висит, пока клапан не отпущен, —
     /// `inFlightTunnels` держится непустым, как реальная операция на 2–9 с.
     private final class GatedTunnelClient: TunnelCommandRunning {
