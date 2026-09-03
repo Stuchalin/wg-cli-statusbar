@@ -44,3 +44,14 @@
 "config.reveal.error.auth_failed" = "Не удалось пройти аутентификацию — секреты не показаны";
 "config.reveal.error.auth_unavailable" = "Проверка владельца недоступна на этом Mac";
 "config.reveal.error.read_failed" = "Не удалось показать конфигурацию";
+"config.viewer.title" = "Конфигурация %@";
+"config.viewer.reload" = "Обновить";
+"config.viewer.reveal" = "Показать секреты";
+"config.viewer.hide" = "Скрыть секреты";
+"config.viewer.loading" = "Загрузка…";
+"config.viewer.revealing" = "Ожидание аутентификации…";
+"config.viewer.masked_badge" = "ключи скрыты";
+"config.viewer.raw_badge" = "секреты открыты";
+"config.error.load_failed" = "Не удалось загрузить конфигурацию";
+"config.error.unavailable" = "Конфигурация недоступна";
+"tunnel.accessibility.details" = "Показать конфигурацию %@";

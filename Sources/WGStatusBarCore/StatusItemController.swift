@@ -203,6 +203,9 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// Установщик сервиса для пунктов меню (продакшн — `InstallerService`,
     /// колбэки привязываются в AppDelegate).
     private let installer: ServiceInstalling
+    /// Вьювер конфига для кнопки деталей строки туннеля (продакшн —
+    /// `ConfigViewerController`; nil — детали недоступны, клик — no-op).
+    private let configViewer: ConfigViewing?
     private let statusItem: NSStatusItem
     private var cancellable: AnyCancellable?
     /// Ответ `state` асинхронный: к моменту первой сборки меню список туннелей
@@ -223,9 +226,10 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// (`menuNeedsUpdate` создаёт новый `NSHostingView` — `@State` вью сбрасывается).
     private var isLegendVisible = false
 
-    public init(model: WireGuardStatusModel, installer: ServiceInstalling) {
+    public init(model: WireGuardStatusModel, installer: ServiceInstalling, configViewer: ConfigViewing? = nil) {
         self.model = model
         self.installer = installer
+        self.configViewer = configViewer
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
@@ -389,9 +393,16 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// `isEnabled` структуры (снапшот на момент сборки) вью не нужен:
     /// состояние выводится из тех же источников модели.
     private func makeTunnelItem(tunnel: TunnelInfo, isEnabled: Bool) -> NSMenuItem {
-        let rowView = TunnelRowView(model: model, tunnelName: tunnel.name) { [weak self] name in
-            self?.model.toggleTunnel(named: name)
-        }
+        let rowView = TunnelRowView(
+            model: model,
+            tunnelName: tunnel.name,
+            onToggle: { [weak self] name in
+                self?.model.toggleTunnel(named: name)
+            },
+            onShowDetails: { [weak self] name in
+                self?.showConfigInViewer(named: name)
+            }
+        )
         let hostingView = NSHostingView(rootView: rowView)
         // Высота строки фиксирована контентом — мерим fittingSize тем же
         // приёмом, что и карточку.
@@ -469,6 +480,33 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     }
 
     // MARK: - Действия пунктов
+
+    /// Кнопка деталей строки туннеля: меню обязано закрыться до показа
+    /// отдельного окна (иначе трекинг меню крадёт фокус), окно вьювера —
+    /// поверх, демонстрация — через `presentConfigViewer`.
+    private func showConfigInViewer(named name: String) {
+        Self.presentConfigViewer(named: name, viewer: configViewer) { [weak self] in
+            guard let self else { return }
+            // menuDidClose приходит и сам, но выставляем сразу: закрытое
+            // состояние не должно зависеть от доставки делегатного колбэка.
+            menu?.cancelTracking()
+            isMenuOpen = false
+        }
+    }
+
+    /// Открытие вьювера из строки туннеля — статически, чтобы тестировать
+    /// без `NSStatusItem` (как `performStatusAction`): без вьювера — тихий
+    /// no-op; с вьювером — сначала закрытие трекинга меню, только затем
+    /// показ (порядок важен: окно активируется и забирает фокус).
+    static func presentConfigViewer(
+        named name: String,
+        viewer: ConfigViewing?,
+        cancelMenuTracking: () -> Void
+    ) {
+        guard let viewer else { return }
+        cancelMenuTracking()
+        viewer.showConfig(named: name)
+    }
 
     /// Диспетчеризация действий меню — статически, чтобы тестировать без
     /// создания `NSStatusItem` (quit и установщик инжектятся: реальный

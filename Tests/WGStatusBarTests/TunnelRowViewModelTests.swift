@@ -43,4 +43,32 @@ final class TunnelRowViewModelTests: XCTestCase {
         XCTAssertEqual(up.accessibilityLabel, L10n.string("tunnel.accessibility.on", "kvmka-ai"))
         XCTAssertEqual(down.accessibilityLabel, L10n.string("tunnel.accessibility.off", "kvmka-ai"))
     }
+
+    // MARK: - Кнопка деталей
+
+    /// Подпись деталей — своя (не состояние туннеля) и несёт имя: отдельный
+    /// VoiceOver-элемент рядом с toggle.
+    func testDetailsAccessibilityLabelCarriesNameAndIsIndependentOfState() {
+        let up = TunnelRowViewModel(name: "kvmka-ai", isUp: true, inFlightTunnels: [])
+        let down = TunnelRowViewModel(name: "kvmka-ai", isUp: false, inFlightTunnels: [])
+
+        XCTAssertEqual(up.detailsAccessibilityLabel, L10n.string("tunnel.accessibility.details", "kvmka-ai"))
+        XCTAssertEqual(
+            down.detailsAccessibilityLabel,
+            up.detailsAccessibilityLabel,
+            "подпись деталей не зависит от isUp"
+        )
+    }
+
+    /// Во время операции toggle глушится (isBusy/isEnabled), но кнопка деталей
+    /// живёт по своей логике: вью-модель не тащит для неё отдельного флага.
+    func testRowViewModelHasNoOperationFlagForDetails() {
+        let busy = TunnelRowViewModel(name: "kvmka-ai", isUp: false, inFlightTunnels: ["kvmka-ai"])
+
+        XCTAssertFalse(busy.isEnabled, "toggle во время операции глушится")
+        XCTAssertFalse(
+            busy.detailsAccessibilityLabel.isEmpty,
+            "подпись деталей доступна и во время операции"
+        )
+    }
 }

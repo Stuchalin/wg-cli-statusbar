@@ -267,16 +267,16 @@ Files:
 - `Tests/WGStatusBarTests/StatusItemControllerTests.swift`
 - `Tests/WGStatusBarTests/ConfigViewerLocalizationTests.swift` — new
 
-- [ ] Add independent toggle/details hit targets and VoiceOver labels; preserve toggle busy/disabled/spinner behavior.
-- [ ] Add one reusable read-only monospaced window with selectable text, Reload, Reveal secrets/Hide secrets, progress, and inline safe errors.
-- [ ] Implement generation-checked masked load, reveal, hide, reload, selection switch, and close behavior; every safe transition clears raw state before awaiting.
-- [ ] Close menu tracking before presenting the window and activate the accessory app window without changing menu rebuild behavior.
-- [ ] Keep viewer work independent of `WireGuardStatusModel`, `inFlightTunnels`, status/state timers, and service install callbacks.
-- [ ] Add complete English/Russian labels; a dedicated localization test loads both resource tables and asserts every viewer/auth/error/accessibility key is present and non-empty.
-- [ ] Test success and error state transitions, late completion after close/switch/reload, repeated actions, whole-document replacement after file change, and preservation of tunnel behavior.
-- [ ] Acceptance: default window never shows the original values of canonical `PrivateKey`/`PresharedKey` assignments; raw mode appears only after both authentication and privileged read succeed; comments/hooks/unknown directives retain their documented visibility; Hide/Reload/close/switch remove raw UI state; current tunnel operations and menu behavior remain green.
-- [ ] Validation: run `ConfigViewerModelTests`, `TunnelRowViewModelTests`, `StatusItemControllerTests`, and `ConfigViewerLocalizationTests`, then `git diff --check`.
-- [ ] run tests - must pass before next task
+- [x] Add independent toggle/details hit targets and VoiceOver labels; preserve toggle busy/disabled/spinner behavior.
+- [x] Add one reusable read-only monospaced window with selectable text, Reload, Reveal secrets/Hide secrets, progress, and inline safe errors.
+- [x] Implement generation-checked masked load, reveal, hide, reload, selection switch, and close behavior; every safe transition clears raw state before awaiting.
+- [x] Close menu tracking before presenting the window and activate the accessory app window without changing menu rebuild behavior.
+- [x] Keep viewer work independent of `WireGuardStatusModel`, `inFlightTunnels`, status/state timers, and service install callbacks.
+- [x] Add complete English/Russian labels; a dedicated localization test loads both resource tables and asserts every viewer/auth/error/accessibility key is present and non-empty.
+- [x] Test success and error state transitions, late completion after close/switch/reload, repeated actions, whole-document replacement after file change, and preservation of tunnel behavior.
+- [x] Acceptance: default window never shows the original values of canonical `PrivateKey`/`PresharedKey` assignments; raw mode appears only after both authentication and privileged read succeed; comments/hooks/unknown directives retain their documented visibility; Hide/Reload/close/switch remove raw UI state; current tunnel operations and menu behavior remain green.
+- [x] Validation: run `ConfigViewerModelTests`, `TunnelRowViewModelTests`, `StatusItemControllerTests`, and `ConfigViewerLocalizationTests`, then `git diff --check`.
+- [x] run tests - must pass before next task
 
 ### Task 5: Verify acceptance criteria
 

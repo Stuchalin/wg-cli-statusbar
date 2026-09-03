@@ -44,3 +44,14 @@
 "config.reveal.error.auth_failed" = "Authentication failed — secrets were not revealed";
 "config.reveal.error.auth_unavailable" = "Owner authentication is unavailable on this Mac";
 "config.reveal.error.read_failed" = "Revealing the configuration failed";
+"config.viewer.title" = "Configuration %@";
+"config.viewer.reload" = "Reload";
+"config.viewer.reveal" = "Reveal secrets";
+"config.viewer.hide" = "Hide secrets";
+"config.viewer.loading" = "Loading…";
+"config.viewer.revealing" = "Waiting for authentication…";
+"config.viewer.masked_badge" = "keys hidden";
+"config.viewer.raw_badge" = "secrets visible";
+"config.error.load_failed" = "Could not load the configuration";
+"config.error.unavailable" = "The configuration is unavailable";
+"tunnel.accessibility.details" = "Show configuration %@";
