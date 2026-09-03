@@ -16,8 +16,9 @@ A minimal macOS menu-bar app for WireGuard: live tunnel status in the menu bar a
   color legend; its state persists across menu reopenings.
 - **Tunnels section** — one row per wg-quick config found on the machine (● up, ○ down); a click
   brings the tunnel up or down through the daemon. The menu stays open, the clicked row shows a
-  spinner, other rows are disabled until the op finishes. Changes made outside the app
-  (`wg-quick` in a terminal) are reflected within 5 s.
+  spinner, the other rows' toggles are disabled until the op finishes (the per-row document
+  button stays available). Changes made outside the app (`wg-quick` in a terminal) are reflected
+  within 5 s.
 - **Read-only config viewer** — a small document button beside each tunnel row opens one reusable
   window with that tunnel's `.conf`: the full text, monospaced, selectable and copyable, never
   editable. Values of canonical `PrivateKey`/`PresharedKey` assignments are masked by default;

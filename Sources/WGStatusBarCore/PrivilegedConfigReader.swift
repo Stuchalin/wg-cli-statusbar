@@ -62,8 +62,10 @@ public struct LocalAuthenticationConfigAuthenticator: ConfigRevealAuthenticating
     /// после invalidate, системой) — тихий исход; недоступность политики
     /// (биометрия/пароль не настроены) — отдельная ветка; прочее — сбой.
     /// Ошибки LAError не содержат содержимого конфигурации и в диагностику
-    /// не попадают — наружу уходит только категория.
-    private static func classify(success: Bool, error: Error?) -> ConfigRevealAuthOutcome {
+    /// не попадают — наружу уходит только категория. Внутренняя (не private)
+    /// ради табличного теста по кодам LAError — системный промпт не
+    /// автоматизируется.
+    static func classify(success: Bool, error: Error?) -> ConfigRevealAuthOutcome {
         if success { return .success }
         switch (error as? LAError)?.code {
         case .userCancel, .appCancel, .systemCancel:
@@ -155,11 +157,13 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
     }
 
     /// Потолочное накопление одного потока: копит до `cap` байт, дальше читает
-    /// в никуда, запоминая превышение. Писатель один (drain-таск), читаем
-    /// после схода DispatchGroup — гонки нет.
+    /// в никуда, запоминая превышение. Писатель один (drain-таск), но читатель
+    /// идёт после ограниченного ожидания EOF — внук ребёнка может держать пайп
+    /// дольше grace, и дрейн ещё пишет: доступ под локом, чтение — снапшотом.
     private final class DrainAccumulator {
-        private(set) var data = Data()
-        private(set) var exceeded = false
+        private let lock = NSLock()
+        private var data = Data()
+        private var exceeded = false
         private let cap: Int
 
         init(cap: Int) {
@@ -168,6 +172,8 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
 
         func append(_ chunk: Data) {
             guard !chunk.isEmpty else { return }
+            lock.lock()
+            defer { lock.unlock() }
             let room = cap - data.count
             if room <= 0 {
                 exceeded = true
@@ -177,6 +183,13 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
             if chunk.count > room {
                 exceeded = true
             }
+        }
+
+        /// Согласованная пара накопленного данных и флага превышения.
+        func snapshot() -> (data: Data, exceeded: Bool) {
+            lock.lock()
+            defer { lock.unlock() }
+            return (data, exceeded)
         }
     }
 
@@ -290,8 +303,12 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
         process.waitUntilExit()
 
         // EOF наших пайпов приходит со смертью ребёнка (write-концы держит
-        // он один); ждём ограниченно — не сошлось, классифицируем накопленное.
+        // он один); ждём ограниченно — переживший ребёнка внук может держать
+        // пайп дольше grace. Не сошлось — классифицируем по накопленному
+        // снапшоту (дрейн может ещё писать; чтение под локом аккумулятора).
         _ = drained.wait(timeout: .now() + drainGrace)
+        let stdoutSnapshot = stdoutAccumulator.snapshot()
+        let stderrSnapshot = stderrAccumulator.snapshot()
 
         // Отмена важнее классификации: результат уже никому не адресован.
         if handle.isCancelled {
@@ -301,10 +318,10 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
             return .failure(.timedOut)
         }
         if process.terminationReason == .exit, process.terminationStatus == 0 {
-            if stdoutAccumulator.exceeded {
+            if stdoutSnapshot.exceeded {
                 return .failure(.outputExceeded)
             }
-            guard let stdout = String(data: stdoutAccumulator.data, encoding: .utf8) else {
+            guard let stdout = String(data: stdoutSnapshot.data, encoding: .utf8) else {
                 return .failure(.exitFailure)
             }
             return .success(stdout: stdout)
@@ -313,7 +330,7 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
         // номеру ошибки AppleScript `(-128)` в stderr (текст локализуется
         // системой, номер — нет; тот же приём, что InstallerService.interpret).
         // Сам stderr наружу не идёт — только категория исхода.
-        if stderrAccumulator.data.range(of: Data("(-128)".utf8)) != nil {
+        if stderrSnapshot.data.range(of: Data("(-128)".utf8)) != nil {
             return .promptCancelled
         }
         return .failure(.exitFailure)
@@ -324,24 +341,28 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
 
 /// Снимок lstat для префлайта: тип записи, владелец и биты прав.
 public struct PrivilegedHelperStatEntry: Equatable {
-    public let isSymbolicLink: Bool
-    public let isDirectory: Bool
-    public let isRegularFile: Bool
+    /// Тип записи — ровно один факт из `st_mode & S_IFMT`, а не набор булевых
+    /// (комбинация «каталог и обычный файл одновременно» невыразима).
+    public enum Kind: Equatable {
+        case symbolicLink
+        case directory
+        case regularFile
+        /// FIFO, устройство, сокет и прочее.
+        case other
+    }
+
+    public let kind: Kind
     /// uid владельца; root == 0.
     public let ownerUID: Int
     /// Биты прав без типа файла (st_mode & 0o7777).
     public let permissions: Int
 
     public init(
-        isSymbolicLink: Bool,
-        isDirectory: Bool,
-        isRegularFile: Bool,
+        kind: Kind,
         ownerUID: Int,
         permissions: Int
     ) {
-        self.isSymbolicLink = isSymbolicLink
-        self.isDirectory = isDirectory
-        self.isRegularFile = isRegularFile
+        self.kind = kind
         self.ownerUID = ownerUID
         self.permissions = permissions
     }
@@ -360,11 +381,19 @@ public struct PosixPrivilegedHelperProbingFileSystem: PrivilegedHelperProbingFil
     public func statEntry(atPath path: String) -> PrivilegedHelperStatEntry? {
         var status = stat()
         guard lstat(path, &status) == 0 else { return nil }
-        let fileType = Int(status.st_mode & S_IFMT)
+        let kind: PrivilegedHelperStatEntry.Kind
+        switch Int(status.st_mode & S_IFMT) {
+        case Int(S_IFLNK):
+            kind = .symbolicLink
+        case Int(S_IFDIR):
+            kind = .directory
+        case Int(S_IFREG):
+            kind = .regularFile
+        default:
+            kind = .other
+        }
         return PrivilegedHelperStatEntry(
-            isSymbolicLink: fileType == S_IFLNK,
-            isDirectory: fileType == S_IFDIR,
-            isRegularFile: fileType == S_IFREG,
+            kind: kind,
             ownerUID: Int(status.st_uid),
             permissions: Int(status.st_mode & 0o7777)
         )
@@ -578,21 +607,21 @@ public final class PrivilegedConfigReader: ConfigRevealExecuting {
             .replacingOccurrences(of: "\"", with: "\\\"")
     }
 
-    /// Каталог хелпера: существует, не симлинк, каталог, root, без
-    /// group/world-записи.
+    /// Каталог хелпера: существует, каталог (не симлинк и не прочее), root,
+    /// без group/world-записи.
     static func preflightDirectoryFailure(_ entry: PrivilegedHelperStatEntry?) -> PrivilegedConfigError? {
         guard let entry else { return .helperUnavailable }
-        guard !entry.isSymbolicLink, entry.isDirectory else { return .helperUnavailable }
+        guard entry.kind == .directory else { return .helperUnavailable }
         guard entry.ownerUID == 0 else { return .helperUnavailable }
         guard entry.permissions & unsafeWritableBits == 0 else { return .helperUnavailable }
         return nil
     }
 
-    /// Бинарь хелпера: существует, не симлинк, обычный файл, root, без
-    /// group/world-записи, исполняемый владельцем.
+    /// Бинарь хелпера: существует, обычный файл (не симлинк и не прочее),
+    /// root, без group/world-записи, исполняемый владельцем.
     static func preflightBinaryFailure(_ entry: PrivilegedHelperStatEntry?) -> PrivilegedConfigError? {
         guard let entry else { return .helperUnavailable }
-        guard !entry.isSymbolicLink, entry.isRegularFile else { return .helperUnavailable }
+        guard entry.kind == .regularFile else { return .helperUnavailable }
         guard entry.ownerUID == 0 else { return .helperUnavailable }
         guard entry.permissions & unsafeWritableBits == 0 else { return .helperUnavailable }
         guard entry.permissions & 0o100 != 0 else { return .helperUnavailable }

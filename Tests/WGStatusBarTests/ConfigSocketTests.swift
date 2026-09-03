@@ -659,11 +659,13 @@ final class ConfigSocketTests: XCTestCase {
     }
 
     func testConfigResponseLimitFitsMaximumLegitimateEnvelope() {
-        // Лимит recv выведен из максимума легитимного конверта: заголовок
-        // версий + тег + base64 документа размера лимита ридера + терминатор,
-        // с запасом только на рост заголовка (64 байта против текущих ~8).
+        // Лимит recv выведен из максимума легитимного конверта МАСКИРОВАННОГО
+        // документа: заголовок версий + тег + base64 текста размера
+        // `maxSanitizedConfigBytes` (санитизация удлиняет raw-файл — лимит
+        // ридера ограничивает только вход) + терминатор, с запасом только на
+        // рост заголовка (64 байта против текущих ~8).
         let headerBytes = "ok \(helperProtocolVersion) \(helperBuildNumber)\n".utf8.count
-        let maxBase64Bytes = (TunnelConfigReader.maxSizeBytes + 2) / 3 * 4
+        let maxBase64Bytes = (maxSanitizedConfigBytes + 2) / 3 * 4
         let maxLegitimateBytes = headerBytes + ConfigEnvelope.tag.utf8.count + maxBase64Bytes + 1
         XCTAssertGreaterThanOrEqual(
             SocketConfigClient.maxResponseBytes,
@@ -674,6 +676,43 @@ final class ConfigSocketTests: XCTestCase {
             SocketConfigClient.maxResponseBytes - maxLegitimateBytes,
             64,
             "запас лимита — только на рост заголовка, без бездонного буфера"
+        )
+    }
+
+    /// Файл в пределах лимита ридера, но маскирование удлиняет его за лимит
+    /// raw-размера (строки `PrivateKey=x` по 12 байт → 22 байта): легитимный
+    /// ответ демона обязан доходить до клиента целиком, а не отвергаться как
+    /// мусор канала (регрессия: лимиты, выведенные из raw-лимита ридера).
+    func testConfigRoundTripsGrowthHeavyDocumentWithinReaderLimit() async throws {
+        let line = "PrivateKey=x\n"
+        let lineCount = (TunnelConfigReader.maxSizeBytes - 1024) / line.utf8.count
+        let raw = String(repeating: line, count: lineCount)
+        XCTAssertLessThanOrEqual(raw.utf8.count, TunnelConfigReader.maxSizeBytes, "файл проходит лимит ридера")
+        let masked = sanitizeWGQuickConfig(raw)
+        XCTAssertGreaterThan(masked.utf8.count, TunnelConfigReader.maxSizeBytes, "маскирование удлиняет документ за raw-лимит")
+        XCTAssertLessThanOrEqual(masked.utf8.count, maxSanitizedConfigBytes, "рост в пределах 2×")
+
+        let readerFS = FakeReaderFileSystem()
+        readerFS.contents[configFilePath("growth")] = raw
+        let socketPath = try makeServer(readerFS: readerFS)
+
+        let document = try await SocketConfigClient(socketPath: socketPath).maskedConfig(named: "growth")
+        XCTAssertEqual(document.text, masked)
+        XCTAssertFalse(document.text.contains("PrivateKey=x"), "значения назначений спрятаны")
+    }
+
+    /// Кнопка деталей не глушится туннельными операциями — запрос `config`
+    /// может встать в последовательную очередь accept-loop за show-тиком и
+    /// op-бюджетом; клиентский дедлайн обязан покрывать худший случай
+    /// (4.0 + 9.0 = 13.0 с), числа — из констант (по образцу туннельного
+    /// инварианта в `SocketTunnelClientTests`).
+    func testConfigTimeoutCoversSequentialQueueBehindShowAndTunnelOp() {
+        let showBudget = WGShowExecutor.defaultTimeout + 2 * WGShowExecutor.defaultKillGrace
+        let opBudget = WGQuickExecutor.defaultOpTimeout + 2 * WGQuickExecutor.defaultKillGrace
+        XCTAssertGreaterThan(
+            SocketConfigClient.defaultTimeout,
+            showBudget + opBudget,
+            "config-дедлайн обязан пережить очередь за show-тиком и туннельной операцией"
         )
     }
 

@@ -1,3 +1,4 @@
+import LocalAuthentication
 import XCTest
 @testable import WGStatusBarCore
 
@@ -65,9 +66,7 @@ final class PrivilegedConfigReaderTests: XCTestCase {
         symlink: Bool = false
     ) -> PrivilegedHelperStatEntry {
         PrivilegedHelperStatEntry(
-            isSymbolicLink: symlink,
-            isDirectory: !symlink,
-            isRegularFile: false,
+            kind: symlink ? .symbolicLink : .directory,
             ownerUID: ownerUID,
             permissions: permissions
         )
@@ -80,9 +79,7 @@ final class PrivilegedConfigReaderTests: XCTestCase {
         regular: Bool = true
     ) -> PrivilegedHelperStatEntry {
         PrivilegedHelperStatEntry(
-            isSymbolicLink: symlink,
-            isDirectory: false,
-            isRegularFile: regular && !symlink,
+            kind: symlink ? .symbolicLink : (regular ? .regularFile : .other),
             ownerUID: ownerUID,
             permissions: permissions
         )
@@ -274,9 +271,7 @@ final class PrivilegedConfigReaderTests: XCTestCase {
     func testNonDirectoryHelperPathFailsClosed() async {
         // Файл на месте каталога.
         let env = validFSWith(
-            directory: PrivilegedHelperStatEntry(
-                isSymbolicLink: false, isDirectory: false, isRegularFile: true, ownerUID: 0, permissions: 0o755
-            )
+            directory: PrivilegedHelperStatEntry(kind: .regularFile, ownerUID: 0, permissions: 0o755)
         )
         let sut = makeSUT(fs: env.0, runner: env.1, auth: env.2)
         expectFailure(await awaitReveal(sut), .helperUnavailable)
@@ -514,6 +509,44 @@ final class PrivilegedConfigReaderTests: XCTestCase {
 
         expectFailure(await awaitReveal(sut), .helperUnavailable)
         XCTAssertEqual(env.auth.callCount, 0, "контекст LAContext не создаётся до прохождения префлайта")
+    }
+
+    /// Табличная классификация LAError-кодов: настоящий промпт не
+    /// автоматизируется, но маппинг кодов в исходы — чистая функция, и
+    /// перепутанный бакет менял бы текст пользователю (отмена Touch ID
+    /// показывалась бы сбоем, Mac без пароля — сбоем вместо «недоступно»).
+    func testAuthenticationClassifierBucketsLAErrorCodes() {
+        XCTAssertEqual(
+            LocalAuthenticationConfigAuthenticator.classify(success: true, error: nil),
+            .success
+        )
+        for code in [LAError.Code.userCancel, .appCancel, .systemCancel] {
+            XCTAssertEqual(
+                LocalAuthenticationConfigAuthenticator.classify(success: false, error: LAError(code)),
+                .userCancelled,
+                "код \(code) — тихая отмена"
+            )
+        }
+        for code in [LAError.Code.biometryNotAvailable, .biometryNotEnrolled, .biometryLockout, .passcodeNotSet] {
+            XCTAssertEqual(
+                LocalAuthenticationConfigAuthenticator.classify(success: false, error: LAError(code)),
+                .unavailable,
+                "код \(code) — политика недоступна"
+            )
+        }
+        // Прочие LAError-коды, ошибка не-типа LAError и провал без ошибки — сбой.
+        XCTAssertEqual(
+            LocalAuthenticationConfigAuthenticator.classify(success: false, error: LAError(.invalidContext)),
+            .failed
+        )
+        XCTAssertEqual(
+            LocalAuthenticationConfigAuthenticator.classify(success: false, error: URLError(.badURL)),
+            .failed
+        )
+        XCTAssertEqual(
+            LocalAuthenticationConfigAuthenticator.classify(success: false, error: nil),
+            .failed
+        )
     }
 
     // MARK: - Привилегированный запуск
@@ -828,6 +861,87 @@ final class PrivilegedConfigReaderTests: XCTestCase {
         XCTAssertEqual(outcome, .failure(.exitFailure), "не-UTF-8 stdout — мусор без попадания наружу")
     }
 
+    // MARK: - Реальный osascript: выживание терминатора конверта
+
+    /// Продакшн happy-path Reveal прогоняет stdout реального osascript через
+    /// `decodeRawEnvelope`; валидность конверта — эмерджентное свойство цепочки
+    /// «хелпер печатает `b64:<base64>\n` → `do shell script` снимает один
+    /// завершающий `\n` → osascript добавляет свой при печати результата».
+    /// Здесь цепочка настоящая (кроме самого хелпера и админ-промпта):
+    /// команда без завершающего `\n` в stdout обязана прийти валидным
+    /// конвертом — `do shell script` возвращает строку без него, osascript
+    /// печатает со своим.
+    func testProcessRunnerOsaScriptEnvelopeSurvivesWithoutTrailingNewline() async {
+        let runner = ProcessPrivilegedRunner()
+        let envelopePayload = ConfigEnvelope.tag + Data("hello\n".utf8).base64EncodedString()
+        let outcome = await runner.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                "do shell script \"/usr/bin/printf \(envelopePayload)\"",
+            ],
+            timeout: 10.0,
+            maxCollectedBytes: 4096
+        )
+
+        guard case .success(let stdout) = outcome else {
+            XCTFail("osascript должен завершиться успехом: \(outcome)")
+            return
+        }
+        guard case .revealed(let document) = PrivilegedConfigReader.decodeRawEnvelope(stdout) else {
+            XCTFail("stdout реального osascript обязан быть валидным конвертом: \(String(describing: stdout.suffix(64)))")
+            return
+        }
+        XCTAssertEqual(document.text, "hello\n")
+        XCTAssertTrue(document.hasFinalNewline, "собственный \\n документа живёт внутри base64")
+    }
+
+    /// Вторая половина цепочки: stdout shell-команды С завершающим `\n`
+    /// (`echo`) — `do shell script` снимает его, osascript возвращает свой:
+    /// результирующая форма конверта та же, двойного терминатора не возникает.
+    func testProcessRunnerOsaScriptEnvelopeSurvivesWithTrailingNewline() async {
+        let runner = ProcessPrivilegedRunner()
+        let envelopePayload = ConfigEnvelope.tag + Data("hello".utf8).base64EncodedString()
+        let outcome = await runner.run(
+            [
+                "/usr/bin/osascript",
+                "-e",
+                "do shell script \"/bin/echo \(envelopePayload)\"",
+            ],
+            timeout: 10.0,
+            maxCollectedBytes: 4096
+        )
+
+        guard case .success(let stdout) = outcome else {
+            XCTFail("osascript должен завершиться успехом: \(outcome)")
+            return
+        }
+        guard case .revealed(let document) = PrivilegedConfigReader.decodeRawEnvelope(stdout) else {
+            XCTFail("stdout реального osascript обязан быть валидным конвертом: \(String(describing: stdout.suffix(64)))")
+            return
+        }
+        XCTAssertEqual(document.text, "hello")
+        XCTAssertFalse(document.hasFinalNewline, "снятый echo-терминатор не добавляет документу \\n")
+    }
+
+    /// Ребёнок вышел, но переживающий его внук (`sleep 5 &`) унаследовал
+    /// stdout: EOF не приходит, ожидание дрейна ограничено grace — раннер
+    /// обязан вернуться ограниченно и с накопленным stdout (fail-closed,
+    /// не виснуть). Регрессия на неограниченный wait.
+    func testProcessRunnerReturnsBoundedWhenGrandchildHoldsPipeOpen() async {
+        let runner = ProcessPrivilegedRunner()
+        let started = Date()
+        let outcome = await runner.run(
+            ["/bin/sh", "-c", "/usr/bin/printf b64:aGVsbG8K; /bin/sleep 5 &"],
+            timeout: nil,
+            maxCollectedBytes: 4096
+        )
+        let elapsed = Date().timeIntervalSince(started)
+
+        XCTAssertEqual(outcome, .success(stdout: "b64:aGVsbG8K"), "накопленный до таймаута дрейна stdout возвращается")
+        XCTAssertLessThan(elapsed, 4.0, "внук, держащий пайп, не подвешивает раннер")
+    }
+
     // MARK: - POSIX lstat-слой
 
     func testPosixProbeReportsRealEntryTypes() throws {
@@ -840,9 +954,7 @@ final class PrivilegedConfigReaderTests: XCTestCase {
         defer { try? FileManager.default.removeItem(at: tmp) }
         FileManager.default.createFile(atPath: tmp.path, contents: Data("x".utf8))
         let entry = try XCTUnwrap(probe.statEntry(atPath: tmp.path))
-        XCTAssertTrue(entry.isRegularFile)
-        XCTAssertFalse(entry.isDirectory)
-        XCTAssertFalse(entry.isSymbolicLink)
+        XCTAssertEqual(entry.kind, .regularFile)
     }
 
     // MARK: - Локализованные сообщения об ошибках

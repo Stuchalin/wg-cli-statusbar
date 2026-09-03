@@ -218,6 +218,33 @@ final class ConfigViewerModelTests: XCTestCase {
         }
     }
 
+    /// Ошибка чужого типа (не `ConfigFetchError` — сломанный ридер будущего
+    /// или неожиданное исключение) — та же общая ошибка загрузки, не крэш и не
+    /// тишина.
+    func testForeignLoadErrorMapsToGenericLoadFailure() {
+        let (model, reader, _) = makeModel()
+        model.show(name: "kvmka-ai")
+        waitUntil { reader.pendingCount > 0 }
+        reader.complete(name: "kvmka-ai", with: .failure(URLError(.badURL)))
+        waitUntil { !model.isLoading }
+
+        XCTAssertEqual(model.errorMessage, L10n.string("config.error.load_failed"))
+        XCTAssertEqual(model.displayedText, "")
+    }
+
+    /// Reload без выбранного туннеля — тихий no-op: ни запроса, ни состояния.
+    func testReloadWithoutTunnelIsSilentNoOp() {
+        let (model, reader, _) = makeModel()
+
+        model.reload()
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+
+        XCTAssertTrue(reader.requestedNames.isEmpty, "запроса нет")
+        XCTAssertNil(model.tunnelName)
+        XCTAssertFalse(model.isLoading)
+        XCTAssertNil(model.errorMessage)
+    }
+
     // MARK: - Поколение: поздние результаты гасятся
 
     /// Закрытие окна во время загрузки: опоздавший документ не применяется.
@@ -260,13 +287,18 @@ final class ConfigViewerModelTests: XCTestCase {
     func testReloadFetchesFreshDocumentAndDiscardsStaleGeneration() {
         let (model, reader, _) = makeModel()
         model.show(name: "kvmka-ai")
+        // Первый запрос обязан зарегистрироваться ДО Reload — иначе порядок
+        // регистрации двух detached-задач под одним именем недетерминирован и
+        // «stale» может достаться свежему поколению.
+        waitUntil { reader.pendingCount == 1 }
 
         model.reload()
         waitUntil { reader.pendingCount == 2 }
         XCTAssertEqual(reader.requestedNames, ["kvmka-ai", "kvmka-ai"], "reload перечитывает тот же туннель")
 
-        // Первый (до-Reload'ный) запрос — старое поколение, гасится; второй —
-        // свежий документ. Оба висят под одним именем: разрешение FIFO.
+        // Зарегистрированный первым — до-Reload'ный запрос (старое поколение,
+        // гасится); второй — свежий документ. Оба висят под одним именем:
+        // разрешение FIFO по регистрации.
         reader.complete(name: "kvmka-ai", with: .success(TunnelConfigDocument(text: "stale")))
         reader.complete(name: "kvmka-ai", with: .success(TunnelConfigDocument(text: "fresh")))
         waitUntil { model.displayedText == "fresh" }

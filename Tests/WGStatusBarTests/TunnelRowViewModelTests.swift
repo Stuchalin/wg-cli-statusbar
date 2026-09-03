@@ -60,9 +60,11 @@ final class TunnelRowViewModelTests: XCTestCase {
         )
     }
 
-    /// Во время операции toggle глушится (isBusy/isEnabled), но кнопка деталей
-    /// живёт по своей логике: вью-модель не тащит для неё отдельного флага.
-    func testRowViewModelHasNoOperationFlagForDetails() {
+    /// Во время операции toggle глушится (isBusy/isEnabled), но подпись кнопки
+    /// деталей остаётся доступной: вью-модель не тащит для неё отдельного
+    /// флага операции (негейтированность самой кнопки — свойство view-слоя,
+    /// его держит ручной QA).
+    func testBusyRowKeepsDetailsAccessibilityLabelWhileToggleDisabled() {
         let busy = TunnelRowViewModel(name: "kvmka-ai", isUp: false, inFlightTunnels: ["kvmka-ai"])
 
         XCTAssertFalse(busy.isEnabled, "toggle во время операции глушится")

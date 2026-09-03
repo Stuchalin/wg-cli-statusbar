@@ -148,7 +148,7 @@ enum ConfigEnvelopeError: Error, Equatable {
     /// Закодированная часть — не валидный base64 (алфавит, `=` в середине,
     /// длина не кратна 4).
     case malformedBase64
-    /// Декодировано больше `TunnelConfigReader.maxSizeBytes`.
+    /// Декодировано больше лимита, переданного вызывателем.
     case oversized
     /// Декодированные байты — не UTF-8.
     case invalidUTF8
@@ -170,9 +170,15 @@ enum ConfigEnvelope {
 
     /// Разбирает payload `ok`-ответа `config`: снимает только терминатор
     /// конверта, требует тег, одну строку, валидный base64, размер в пределах
-    /// лимита ридера и полный UTF-8-декод. Возвращает точный текст документа —
-    /// включая наличие или отсутствие у него завершающего `\n`.
-    static func decode(_ payload: String) -> Result<String, ConfigEnvelopeError> {
+    /// `maxDecodedBytes` и полный UTF-8-декод. Возвращает точный текст
+    /// документа — включая наличие или отсутствие у него завершающего `\n`.
+    /// - Parameter maxDecodedBytes: потолок декодированного документа; по
+    ///   умолчанию — лимит ридера (raw-пути), маскированный путь передаёт
+    ///   `maxSanitizedConfigBytes` (санитизация удлиняет текст, см. константу).
+    static func decode(
+        _ payload: String,
+        maxDecodedBytes: Int = TunnelConfigReader.maxSizeBytes
+    ) -> Result<String, ConfigEnvelopeError> {
         // decode(response:) уже отвергает незавершённый payload; здесь то же
         // правило для прямых вызовов — усечённый конверт невалиден.
         guard payload.hasSuffix("\n") else { return .failure(.missing) }
@@ -186,7 +192,7 @@ enum ConfigEnvelope {
         guard isWellFormedBase64(encoded),
               let data = Data(base64Encoded: String(encoded))
         else { return .failure(.malformedBase64) }
-        guard data.count <= TunnelConfigReader.maxSizeBytes else {
+        guard data.count <= maxDecodedBytes else {
             return .failure(.oversized)
         }
         guard let text = String(data: data, encoding: .utf8) else {

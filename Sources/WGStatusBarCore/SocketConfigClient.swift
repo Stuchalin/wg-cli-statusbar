@@ -31,17 +31,22 @@ public enum ConfigFetchError: Error, Equatable {
 public struct SocketConfigClient {
     /// Дедлайн полного обмена (connect+send+чтение до EOF). Обработка
     /// `config` на стороне демона — локальное чтение файла (~0 с), но запрос
-    /// сидит в той же последовательной очереди accept-loop, что и show-тик
-    /// (худший случай — бюджет show 4.0 с), поэтому тот же запас, что у
-    /// show-клиента.
-    public static let defaultTimeout: TimeInterval = 5.0
+    /// сидит в той же последовательной очереди accept-loop, что show-тик и
+    /// туннельные операции. Кнопка деталей намеренно не глушится во время
+    /// операции (открытие вьювера — не туннельная операция): худший случай —
+    /// show-бюджет 4.0 с (тик, начавшийся до клика) + op-бюджет 9.0 с = 13.0 с,
+    /// та же математика очереди, что у `SocketTunnelClient.opTimeout`.
+    public static let defaultTimeout: TimeInterval = 16.0
 
     /// Потолок байт ответа, проверяемый по ходу recv (до накопления):
-    /// заголовок + тег + base64 документа размера `TunnelConfigReader.maxSizeBytes`
-    /// + терминатор, с запасом на заголовок. Легитимный ответ демона больше не
-    /// бывает; разросшийся канал — мусор.
+    /// заголовок + тег + base64 маскированного документа + терминатор, с
+    /// запасом на заголовок. По проводу идёт маскированный текст, а санитизация
+    /// удлиняет документ — потолок выводится из `maxSanitizedConfigBytes`, не
+    /// из лимита ридера (иначе легитимный ответ демона отвергался бы как
+    /// мусор). Крупнее легитимного ответа демона не бывает; разросшийся канал —
+    /// мусор.
     static let maxResponseBytes: Int = {
-        let documentBytes = TunnelConfigReader.maxSizeBytes
+        let documentBytes = maxSanitizedConfigBytes
         let base64Bytes = (documentBytes + 2) / 3 * 4
         // Заголовок `ok <protocol> <build>\n` короче 64 байт с запасом.
         return 64 + ConfigEnvelope.tag.utf8.count + base64Bytes + 1
@@ -123,7 +128,9 @@ public struct SocketConfigClient {
     }
 
     private static func decodeEnvelope(_ payload: String) throws -> String {
-        switch ConfigEnvelope.decode(payload) {
+        // Маскированный документ длиннее raw-файла (санитизация удлиняет
+        // строки) — потолок декода берётся от максимума маскированного текста.
+        switch ConfigEnvelope.decode(payload, maxDecodedBytes: maxSanitizedConfigBytes) {
         case .success(let text):
             return text
         case .failure:

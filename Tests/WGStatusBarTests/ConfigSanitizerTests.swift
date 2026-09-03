@@ -123,4 +123,28 @@ final class ConfigSanitizerTests: XCTestCase {
 
         XCTAssertEqual(sanitizeWGQuickConfig(config), expected)
     }
+
+    // MARK: - граница роста
+
+    /// Санитизация удлиняет документ: строка-назначение не короче `PrivateKey=`
+    /// (11 байт) становится `<ключ> = (hidden)` (22 байта) — рост не больше 2×.
+    /// Патологический файл сплошных минимальных назначений в пределах лимита
+    /// ридера обязан оставаться в пределах `maxSanitizedConfigBytes` — из этой
+    /// границы клиент выводит свой потолок байт ответа.
+    func testSanitizedGrowthStaysWithinMaxSanitizedBytes() {
+        let raw = String(repeating: "PrivateKey=x\n", count: 20_000)
+        let masked = sanitizeWGQuickConfig(raw)
+
+        XCTAssertGreaterThan(masked.utf8.count, raw.utf8.count, "минимальные назначения удлиняют текст")
+        XCTAssertLessThanOrEqual(
+            masked.utf8.count,
+            maxSanitizedConfigBytes,
+            "рост маскированного текста не выходит за 2×-границу"
+        )
+        XCTAssertEqual(
+            maxSanitizedConfigBytes,
+            2 * TunnelConfigReader.maxSizeBytes,
+            "граница выведена из лимита ридера с запасом ровно 2×"
+        )
+    }
 }
