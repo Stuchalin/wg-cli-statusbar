@@ -55,3 +55,8 @@
 "config.error.load_failed" = "Could not load the configuration";
 "config.error.unavailable" = "The configuration is unavailable";
 "tunnel.accessibility.details" = "Show configuration %@";
+"settings.launch_at_login.error.register_failed" = "Could not turn on launch at login";
+"settings.launch_at_login.error.unregister_failed" = "Could not turn off launch at login";
+"settings.launch_at_login.unavailable.not_in_bundle" = "Available only when running from the installed app bundle";
+"settings.launch_at_login.unavailable.not_found" = "macOS cannot find this app as a login item";
+"settings.launch_at_login.unavailable.unknown" = "The login item status is unknown";
