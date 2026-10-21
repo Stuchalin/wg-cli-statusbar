@@ -93,7 +93,7 @@ everything else is covered through a mock.
 - [x] register/unregister failures surface a window-local error that survives a later refresh and is
       replaced by the next action; status is re-read after success and failure
 - [x] a second toggle while an operation is in flight is a no-op
-- [ ] tests pin all of the above through a mock boundary and pass — written, not run: Xcode license not accepted
+- [x] tests pin all of the above through a mock boundary and pass
 
 ### Task 2: Settings window and menu entry
 **Goal:** "Settings…" ⌘, in the menu opens one reusable Settings window with the General section
@@ -111,17 +111,17 @@ ordering as `presentConfigViewer`); no new menu items beyond "Settings…"; ever
       it stays enabled during a tunnel operation
 - [x] opening Settings cancels menu tracking first, then shows and activates the reused window
 - [x] the window refreshes the login-item status on show and on `didBecomeActive`
-- [ ] menu structure / present-seam tests and a localization key-presence test cover the new item
-      and strings and pass — written, not run: Xcode license not accepted
+- [x] menu structure / present-seam tests and a localization key-presence test cover the new item
+      and strings and pass
 
 ### Task 3: Verify acceptance criteria
-- [ ] every story and every Done-when above holds
-- [ ] `make test` passes in full and `make release` builds the bundle; record the test count
+- [x] every story and every Done-when above holds (manual parts: Post-Completion)
+- [x] `make test` passes in full and `make release` builds the bundle; record the test count — 524 executed, 0 failures
 
 ### Task 4: Update documentation
-- [ ] `AGENTS.md` describes the Settings window, the login-item layer, the menu item, the tests and
+- [x] `AGENTS.md` describes the Settings window, the login-item layer, the menu item, the tests and
       the manual QA steps below; `README.md` mentions the option for users
-- [ ] docs describe the current state only
+- [x] docs describe the current state only
 
 ## Post-Completion
 Manual, on the installed `.app` in `~/Applications` (do not mix `build/WGStatusBar.app` and the

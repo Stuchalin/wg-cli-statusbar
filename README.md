@@ -26,6 +26,12 @@ A minimal macOS menu-bar app for WireGuard: live tunnel status in the menu bar a
   (see [Config viewer](#config-viewer)).
 - **One-time service install** from the menu: a small privileged daemon, installed with a single
   password / Touch ID prompt. After that the app runs as a regular user — no sudo.
+- **Launch at login** — **Settings…** (⌘,) in the menu opens a small window with a
+  "Launch at login" toggle. It always shows what macOS reports: if you disable the app in
+  System Settings → General → Login Items, the window says it is waiting for your approval and
+  offers an **Open Login Items** button. The option works only for the installed `.app` (not for
+  `make run`). The bundle is only ad-hoc signed, and how macOS treats such a login item is not
+  verified yet — treat the option as experimental.
 - English and Russian UI.
 
 ## Requirements
