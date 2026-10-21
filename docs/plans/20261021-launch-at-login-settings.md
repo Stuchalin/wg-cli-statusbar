@@ -107,12 +107,12 @@ tunnel operations or service state; menu tracking is cancelled before the window
 ordering as `presentConfigViewer`); no new menu items beyond "Settings…"; every new string in both
 `en` and `ru`.
 **Done when:**
-- [ ] the menu shows "Settings…" ⌘, (placement next to the other app-level items, before Quit) and
+- [x] the menu shows "Settings…" ⌘, (placement next to the other app-level items, before Quit) and
       it stays enabled during a tunnel operation
-- [ ] opening Settings cancels menu tracking first, then shows and activates the reused window
-- [ ] the window refreshes the login-item status on show and on `didBecomeActive`
+- [x] opening Settings cancels menu tracking first, then shows and activates the reused window
+- [x] the window refreshes the login-item status on show and on `didBecomeActive`
 - [ ] menu structure / present-seam tests and a localization key-presence test cover the new item
-      and strings and pass
+      and strings and pass — written, not run: Xcode license not accepted
 
 ### Task 3: Verify acceptance criteria
 - [ ] every story and every Done-when above holds

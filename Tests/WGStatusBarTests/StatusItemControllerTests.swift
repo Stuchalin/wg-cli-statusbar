@@ -189,6 +189,73 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(cancelCount, 0, "без вьювера меню не закрывается")
     }
 
+    // MARK: - Окно настроек: открытие из меню
+
+    private final class OrderRecordingSettings: SettingsPresenting {
+        let onShow: () -> Void
+        init(onShow: @escaping () -> Void) { self.onShow = onShow }
+        func showSettings() { onShow() }
+    }
+
+    /// «Настройки…»: сначала закрывается трекинг меню, только затем окно
+    /// показывается и активируется (порядок как у вьювера конфига).
+    func testPresentSettingsCancelsMenuTrackingBeforeShowing() {
+        var order: [String] = []
+        let settings = OrderRecordingSettings { order.append("show") }
+
+        StatusItemController.presentSettings(settings) {
+            order.append("cancel")
+        }
+
+        XCTAssertEqual(order, ["cancel", "show"], "трекинг меню закрывается до показа")
+    }
+
+    /// Без окна настроек (nil) клик — тихий no-op: ни закрытия меню, ни показа.
+    func testPresentSettingsWithoutWindowIsSilentNoOp() {
+        var cancelCount = 0
+
+        StatusItemController.presentSettings(nil) {
+            cancelCount += 1
+        }
+
+        XCTAssertEqual(cancelCount, 0, "без окна меню не закрывается")
+    }
+
+    /// Диспетчеризация: `.settings` зовёт только показ настроек — без
+    /// установщика и выхода, и работает даже во время туннельной операции.
+    func testPerformSettingsActionOpensSettingsEvenDuringTunnelOperation() {
+        let client = GatedTunnelClient()
+        let model = WireGuardStatusModel(
+            commandRunner: SuccessRunner(),
+            tunnelNamer: CountingTunnelNamer(),
+            socketExists: { false },
+            socketPath: helperSocketPath,
+            tunnelCommandRunner: client
+        )
+        model.toggleTunnel(named: "kvmka-ai")
+        XCTAssertFalse(model.inFlightTunnels.isEmpty, "предусловие: операция в полёте")
+
+        let installer = CountingInstaller()
+        var openCount = 0
+        var quitCalled = false
+        StatusItemController.performStatusAction(
+            .settings,
+            model: model,
+            installer: installer,
+            openSettings: { openCount += 1 },
+            quit: { quitCalled = true }
+        )
+
+        RunLoop.current.run(until: Date().addingTimeInterval(0.2))
+        XCTAssertEqual(openCount, 1, "настройки открываются и во время операции")
+        XCTAssertFalse(quitCalled)
+        XCTAssertEqual(installer.installCount, 0)
+        XCTAssertEqual(installer.uninstallCount, 0)
+
+        client.releaseGate()
+        waitUntil { model.inFlightTunnels.isEmpty }
+    }
+
     /// Туннельный клиент с клапаном: up/down висит, пока клапан не отпущен, —
     /// `inFlightTunnels` держится непустым, как реальная операция на 2–9 с.
     private final class GatedTunnelClient: TunnelCommandRunning {
@@ -256,14 +323,18 @@ final class StatusItemControllerTests: XCTestCase {
 
         assertAction(actionEntry(.refresh, in: entries), id: .refresh, title: "button.refresh", shortcut: "r", enabled: true)
         assertAction(actionEntry(.openConfigs, in: entries), id: .openConfigs, title: "button.open_configs", shortcut: "o", enabled: true)
+        assertAction(actionEntry(.settings, in: entries), id: .settings, title: "button.settings", shortcut: ",", enabled: true)
         assertAction(actionEntry(.quit, in: entries), id: .quit, title: "button.quit", shortcut: "q", enabled: true)
 
         // Дефолт: демона нет, список пуст — секции Tunnels нет, между
         // Конфигами и сервисом один разделитель.
-        XCTAssertEqual(entries.count, 7, "карточка, разделитель, Обновить, Конфиги, разделитель, сервис, Выход")
-        guard case .separator = entries[entries.count - 3] else { return XCTFail("перед пунктом сервиса — разделитель") }
-        guard case .action(.installService, _, _, _, _) = entries[entries.count - 2] else {
-            return XCTFail("перед выходом — пункт сервиса (по умолчанию absent — «Установить»)")
+        XCTAssertEqual(entries.count, 8, "карточка, разделитель, Обновить, Конфиги, разделитель, сервис, Настройки, Выход")
+        guard case .separator = entries[entries.count - 4] else { return XCTFail("перед пунктом сервиса — разделитель") }
+        guard case .action(.installService, _, _, _, _) = entries[entries.count - 3] else {
+            return XCTFail("перед настройками — пункт сервиса (по умолчанию absent — «Установить»)")
+        }
+        guard case .action(.settings, _, _, _, _) = entries[entries.count - 2] else {
+            return XCTFail("перед выходом — «Настройки…»")
         }
         guard case .action(.quit, _, _, _, _) = entries[entries.count - 1] else { return XCTFail("последний пункт — выход") }
     }
@@ -284,7 +355,7 @@ final class StatusItemControllerTests: XCTestCase {
     func testMenuStructureTunnelsSectionPositionAndRows() {
         let entries = StatusMenuStructure.entries(serviceState: .installed, tunnels: makeTunnels())
 
-        XCTAssertEqual(entries.count, 11, "карточка, разделитель, Обновить, Конфиги, разделитель, заголовок, 2 строки, разделитель, сервис, Выход")
+        XCTAssertEqual(entries.count, 12, "карточка, разделитель, Обновить, Конфиги, разделитель, заголовок, 2 строки, разделитель, сервис, Настройки, Выход")
 
         guard case .action(.openConfigs, _, _, _, _) = entries[3] else { return XCTFail("до секции — «Открыть конфиги»") }
         guard case .separator = entries[4] else { return XCTFail("перед секцией — разделитель") }
@@ -294,7 +365,8 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(entries[7], .tunnelRow(TunnelInfo(name: "kvmka-full", isUp: false), isEnabled: true))
         guard case .separator = entries[8] else { return XCTFail("после секции — разделитель") }
         guard case .action(.uninstallService, _, _, _, _) = entries[9] else { return XCTFail("installed — пункт «Удалить сервис»") }
-        guard case .action(.quit, _, _, _, _) = entries[10] else { return XCTFail("последний пункт — выход") }
+        guard case .action(.settings, _, _, _, _) = entries[10] else { return XCTFail("после сервиса — «Настройки…»") }
+        guard case .action(.quit, _, _, _, _) = entries[11] else { return XCTFail("последний пункт — выход") }
     }
 
     /// Секция скрыта при любом состоянии, кроме живого демона — включая
@@ -310,7 +382,7 @@ final class StatusItemControllerTests: XCTestCase {
                 entries.contains { if case .tunnelRow = $0 { return true }; return false },
                 "в состоянии \(state) строк туннелей быть не должно"
             )
-            XCTAssertEqual(entries.count, 7, "состояние \(state): базовая структура без секции")
+            XCTAssertEqual(entries.count, 8, "состояние \(state): базовая структура без секции")
         }
     }
 
@@ -318,7 +390,7 @@ final class StatusItemControllerTests: XCTestCase {
     func testMenuStructureHidesTunnelsSectionWhenListIsEmpty() {
         let entries = StatusMenuStructure.entries(serviceState: .installed, tunnels: [])
 
-        XCTAssertEqual(entries.count, 7)
+        XCTAssertEqual(entries.count, 8)
         XCTAssertFalse(entries.contains { if case .tunnelsHeader = $0 { return true }; return false })
     }
 
@@ -345,6 +417,23 @@ final class StatusItemControllerTests: XCTestCase {
             modifiers: [],
             enabled: false
         )
+    }
+
+    /// «Настройки…» не гейтится туннельной операцией и состоянием сервиса:
+    /// окно настроек не касается демона и туннелей.
+    func testMenuStructureSettingsStaysEnabledDuringOperationInEveryServiceState() {
+        for state in [ServiceState.absent, .broken, .outdated, .installed] {
+            let entries = StatusMenuStructure.entries(
+                refreshEnabled: false,
+                serviceState: state,
+                tunnels: makeTunnels(),
+                hasInFlightTunnelOperation: true
+            )
+            assertAction(actionEntry(.settings, in: entries), id: .settings, title: "button.settings", shortcut: ",", enabled: true)
+            // Ровно один пункт настроек — других новых пунктов нет.
+            let settingsCount = entries.filter { if case .action(.settings, _, _, _, _) = $0 { return true }; return false }.count
+            XCTAssertEqual(settingsCount, 1, "состояние \(state): один пункт «Настройки…»")
+        }
     }
 
     /// Ключ удалённого disabled-плейсхолдера «Управление тоннелями» не
@@ -396,12 +485,15 @@ final class StatusItemControllerTests: XCTestCase {
             }
             XCTAssertFalse(hasOpposite, "в состоянии \(testCase.state) пункта \(opposite) быть не должно")
 
-            // Пункт — сразу перед «Выход»
+            // Пункт — перед «Настройки…» и «Выход»
             guard case .action(.quit, _, _, _, _) = entries.last else {
                 return XCTFail("последний пункт — выход")
             }
-            guard case .action(testCase.id, _, _, _, _) = entries[entries.count - 2] else {
-                return XCTFail("пункт сервиса в состоянии \(testCase.state) — сразу перед выходом")
+            guard case .action(.settings, _, _, _, _) = entries[entries.count - 2] else {
+                return XCTFail("перед выходом — «Настройки…»")
+            }
+            guard case .action(testCase.id, _, _, _, _) = entries[entries.count - 3] else {
+                return XCTFail("пункт сервиса в состоянии \(testCase.state) — сразу перед настройками")
             }
         }
     }
@@ -496,7 +588,16 @@ final class StatusItemControllerTests: XCTestCase {
         XCTAssertEqual(service.keyEquivalent, "", "у пункта сервиса нет шортката")
         XCTAssertEqual(service.tag, StatusMenuAction.installService.rawValue)
 
-        let quit = items[6]
+        let settings = items[6]
+        XCTAssertEqual(settings.title, L10n.string("button.settings"))
+        XCTAssertEqual(settings.keyEquivalent, ",")
+        XCTAssertEqual(settings.keyEquivalentModifierMask, .command)
+        XCTAssertTrue(settings.isEnabled)
+        XCTAssertEqual(settings.tag, StatusMenuAction.settings.rawValue)
+        XCTAssertTrue(settings.target === target)
+        XCTAssertEqual(settings.action, selector)
+
+        let quit = items[7]
         XCTAssertEqual(quit.title, L10n.string("button.quit"))
         XCTAssertEqual(quit.keyEquivalent, "q")
         XCTAssertEqual(quit.keyEquivalentModifierMask, .command)
