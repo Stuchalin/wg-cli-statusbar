@@ -38,9 +38,15 @@ before the task closes; a task marked `**Discuss:** yes` has its approach agreed
 - **`requiresApproval` is not "off"** — show an explanation and an "Open Login Items" button
   (`SMAppService.openSystemSettingsLoginItems()`); never auto unregister/re-register when the user
   has denied it (pair-settled).
-- **Unavailable states are explicit** — `notFound`/unknown status, and the bare binary (not running
-  from a `.app` bundle) show the option as unavailable with a reason. The bare-bundle check is its
-  own fact, separate from the system's `notFound` (pair-settled).
+- **Unavailable states are explicit** — unknown status, and the bare binary (not running from a
+  `.app` bundle) show the option as unavailable with a reason. The bare-bundle check is its own
+  fact, separate from the system's `notFound` (pair-settled). `notFound` itself is the normal
+  first-install status ("the system has never seen your service", Apple DTS,
+  developer.apple.com/forums/thread/719862): it reads off and the toggle calls `register()` from
+  it; the not-found reason is shown only when the status is still `notFound` after a register
+  attempt (thrown or not). The branch review overturned the pair-settled `notFound` → unavailable
+  mapping on that DTS statement — it made launch at login impossible to turn on for a fresh
+  install.
 - **Errors stay in the window** and are not wiped by the next show/didBecomeActive refresh; a new
   user action replaces them (pair-settled). Errors carry fixed localized categories, no raw
   `NSError` text dumped into the UI beyond what is useful (the project's fixed-category convention,

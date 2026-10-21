@@ -101,7 +101,6 @@ final class SettingsModelTests: XCTestCase {
             (true, .enabled, .on),
             (true, .notRegistered, .off),
             (true, .requiresApproval, .requiresApproval),
-            (true, .notFound, .unavailable(.notFound)),
             (true, .unknown, .unavailable(.unknownStatus)),
             (false, .enabled, .unavailable(.notInAppBundle)),
         ]
@@ -112,6 +111,39 @@ final class SettingsModelTests: XCTestCase {
             XCTAssertEqual(model.displayState, item.expected, "\(item)")
             XCTAssertFalse(seen.contains(item.expected), "состояние \(item.expected) не уникально")
             seen.append(item.expected)
+        }
+    }
+
+    /// Полная таблица чистого маппинга: каждый статус (и «ещё не читался») ×
+    /// бандл × «register закончился notFound». Флаг влияет только на
+    /// `notFound` в бандле.
+    func testDeriveFullMatrix() {
+        let statuses: [LoginItemStatus?] = [.enabled, .notRegistered, .requiresApproval, .notFound, .unknown, nil]
+        for status in statuses {
+            for registerEndedNotFound in [false, true] {
+                XCTAssertEqual(
+                    LaunchAtLoginDisplayState.derive(
+                        isAppBundle: false, status: status, registerEndedNotFound: registerEndedNotFound
+                    ),
+                    .unavailable(.notInAppBundle),
+                    "\(String(describing: status)) \(registerEndedNotFound)"
+                )
+                let expected: LaunchAtLoginDisplayState
+                switch status {
+                case .enabled: expected = .on
+                case .notRegistered: expected = .off
+                case .requiresApproval: expected = .requiresApproval
+                case .notFound: expected = registerEndedNotFound ? .unavailable(.notFound) : .off
+                case .unknown, nil: expected = .unavailable(.unknownStatus)
+                }
+                XCTAssertEqual(
+                    LaunchAtLoginDisplayState.derive(
+                        isAppBundle: true, status: status, registerEndedNotFound: registerEndedNotFound
+                    ),
+                    expected,
+                    "\(String(describing: status)) \(registerEndedNotFound)"
+                )
+            }
         }
     }
 
@@ -151,7 +183,6 @@ final class SettingsModelTests: XCTestCase {
 
     func testUnavailableStatesCarryTheirOwnReason() {
         let cases: [(isAppBundle: Bool, status: LoginItemStatus, key: String)] = [
-            (true, .notFound, "settings.launch_at_login.unavailable.not_found"),
             (true, .unknown, "settings.launch_at_login.unavailable.unknown"),
             (false, .notRegistered, "settings.launch_at_login.unavailable.not_in_bundle"),
         ]
@@ -352,14 +383,112 @@ final class SettingsModelTests: XCTestCase {
         XCTAssertEqual(mock.calls, [.openSettings])
     }
 
-    func testToggleInUnavailableStatesIsNoOp() {
-        for status in [LoginItemStatus.notFound, .unknown] {
-            let (model, mock) = makeModel(status: status)
+    func testToggleInUnknownStatusIsNoOp() {
+        let (model, mock) = makeModel(status: .unknown)
+        model.refresh()
+        model.setLaunchAtLogin(true)
+        model.setLaunchAtLogin(false)
+        XCTAssertEqual(mock.calls, [])
+    }
+
+    // MARK: - notFound: обычный статус свежей установки
+
+    /// Система ещё не видела сервис — это «выключено», не недоступность.
+    func testNotFoundBeforeAttemptReadsOffAndClickable() {
+        let (model, _) = makeModel(status: .notFound)
+        model.refresh()
+        XCTAssertEqual(model.displayState, .off)
+        XCTAssertFalse(model.isToggleOn)
+        XCTAssertTrue(model.isToggleEnabled)
+        XCTAssertFalse(model.showsApprovalHint)
+        XCTAssertNil(model.unavailableMessage)
+    }
+
+    /// Выключать нечего: unregister из notFound не зовётся.
+    func testToggleOffFromNotFoundIsNoOp() {
+        let (model, mock) = makeModel(status: .notFound)
+        model.refresh()
+        model.setLaunchAtLogin(false)
+        XCTAssertEqual(mock.calls, [])
+        XCTAssertFalse(model.isBusy)
+    }
+
+    /// Исход register из notFound × статус после попытки: каждая
+    /// комбинация даёт своё отображение.
+    func testRegisterFromNotFoundOutcomes() {
+        let notFoundReason = L10n.string("settings.launch_at_login.unavailable.not_found")
+        let registerFailed = L10n.string("settings.launch_at_login.error.register_failed")
+        let cases: [(throws: Bool, after: LoginItemStatus, state: LaunchAtLoginDisplayState, reason: String?, error: String?)] = [
+            (false, .enabled, .on, nil, nil),
+            (false, .requiresApproval, .requiresApproval, nil, nil),
+            (false, .notRegistered, .off, nil, nil),
+            (false, .notFound, .unavailable(.notFound), notFoundReason, nil),
+            (true, .notFound, .unavailable(.notFound), notFoundReason, registerFailed),
+            (true, .notRegistered, .off, nil, registerFailed),
+        ]
+        for item in cases {
+            let (model, mock) = makeModel(status: .notFound)
+            mock.statusAfterOperation = item.after
+            mock.nextError = item.throws ? MockFailure() : nil
             model.refresh()
+
             model.setLaunchAtLogin(true)
-            model.setLaunchAtLogin(false)
-            XCTAssertEqual(mock.calls, [], "\(status)")
+            waitUntil { !model.isBusy }
+
+            XCTAssertEqual(mock.calls, [.register], "\(item)")
+            XCTAssertEqual(model.displayState, item.state, "\(item)")
+            XCTAssertEqual(model.unavailableMessage, item.reason, "\(item)")
+            XCTAssertEqual(model.errorMessage, item.error, "\(item)")
+            XCTAssertEqual(model.isToggleEnabled, item.state == .on || item.state == .off, "\(item)")
         }
+    }
+
+    /// После неудачной попытки причина держится на refresh, пока система
+    /// говорит notFound, и уходит, как только статус меняется.
+    func testNotFoundReasonPersistsUntilSystemStatusChanges() {
+        let (model, mock) = makeModel(status: .notFound)
+        model.refresh()
+        model.setLaunchAtLogin(true)
+        waitUntil { !model.isBusy }
+        XCTAssertEqual(model.displayState, .unavailable(.notFound))
+
+        model.refresh()
+        XCTAssertEqual(model.displayState, .unavailable(.notFound))
+        model.setLaunchAtLogin(true)
+        XCTAssertEqual(mock.calls, [.register], "недоступное состояние — no-op")
+
+        mock.setStatus(.notRegistered)
+        model.refresh()
+        XCTAssertEqual(model.displayState, .off)
+
+        // Флаг сброшен: новый notFound снова читается как «выключено».
+        mock.setStatus(.notFound)
+        model.refresh()
+        XCTAssertEqual(model.displayState, .off)
+        XCTAssertNil(model.unavailableMessage)
+    }
+
+    /// Unregister, оставивший notFound, не ставит причину — её даёт только
+    /// попытка register.
+    func testUnregisterEndingNotFoundReadsOff() {
+        let (model, mock) = makeModel(status: .enabled)
+        mock.statusAfterOperation = .notFound
+        model.refresh()
+        model.setLaunchAtLogin(false)
+        waitUntil { !model.isBusy }
+        XCTAssertEqual(mock.calls, [.unregister])
+        XCTAssertEqual(model.displayState, .off)
+        XCTAssertNil(model.unavailableMessage)
+    }
+
+    /// Голый бинарь при системном notFound: системе вопросов не задаём.
+    func testBareBinaryWithNotFoundMakesNoSystemCalls() {
+        let (model, mock) = makeModel(status: .notFound, isAppBundle: false)
+        model.refresh()
+        model.setLaunchAtLogin(true)
+        XCTAssertEqual(mock.statusReads, 0)
+        XCTAssertEqual(mock.calls, [])
+        XCTAssertEqual(model.displayState, .unavailable(.notInAppBundle))
     }
 
     // MARK: - Одна операция за раз

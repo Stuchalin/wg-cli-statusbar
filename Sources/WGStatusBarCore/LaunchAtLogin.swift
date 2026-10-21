@@ -12,6 +12,8 @@ public enum LoginItemStatus: Equatable {
     /// Зарегистрировано, но пользователь не одобрил (или выключил) в
     /// System Settings → Login Items — это не «выключено».
     case requiresApproval
+    /// Система ещё ни разу не видела сервис приложения — нормальный статус
+    /// свежей установки до первого `register()` (Apple DTS), не ошибка.
     case notFound
     case unknown
 }
@@ -73,7 +75,9 @@ public func isRunningFromAppBundle(bundleURL: URL) -> Bool {
 public enum LaunchAtLoginUnavailableReason: Equatable {
     /// Голый бинарь, не .app-бандл (dev-запуск).
     case notInAppBundle
-    /// Система не нашла сервис приложения (`SMAppService.Status.notFound`).
+    /// Попытка `register()` закончилась статусом `notFound` (бросила или
+    /// система так и не увидела сервис) — сам по себе `notFound` до попытки
+    /// этой причиной не является.
     case notFound
     /// Неизвестный системе статус (будущие значения `SMAppService.Status`).
     case unknownStatus
@@ -90,7 +94,15 @@ public enum LaunchAtLoginDisplayState: Equatable {
     case unavailable(LaunchAtLoginUnavailableReason)
 
     /// Чистый маппинг факта о бандле и системного статуса.
-    public static func derive(isAppBundle: Bool, status: LoginItemStatus?) -> LaunchAtLoginDisplayState {
+    /// `registerEndedNotFound` — последняя попытка `register()` оставила
+    /// статус `notFound`: только тогда `notFound` недоступен с причиной, до
+    /// попытки это обычное «выключено» свежей установки, из которого
+    /// `register()` и выводит приложение.
+    public static func derive(
+        isAppBundle: Bool,
+        status: LoginItemStatus?,
+        registerEndedNotFound: Bool
+    ) -> LaunchAtLoginDisplayState {
         guard isAppBundle else { return .unavailable(.notInAppBundle) }
         switch status {
         case .enabled:
@@ -100,7 +112,7 @@ public enum LaunchAtLoginDisplayState: Equatable {
         case .requiresApproval:
             return .requiresApproval
         case .notFound:
-            return .unavailable(.notFound)
+            return registerEndedNotFound ? .unavailable(.notFound) : .off
         case .unknown, nil:
             return .unavailable(.unknownStatus)
         }
@@ -138,7 +150,11 @@ public enum LaunchAtLoginError: Error, Equatable {
 ///   no-op, никаких авто-unregister/re-register поверх отказа пользователя;
 /// - оконная ошибка переживает `refresh()` и заменяется только новым
 ///   действием пользователя;
-/// - одна операция за раз: повтор во время операции — молчаливый no-op.
+/// - одна операция за раз: повтор во время операции — молчаливый no-op;
+/// - `notFound` до попытки — «выключено» (свежая установка, система ещё не
+///   видела сервис), переключатель зовёт `register()`; если после попытки
+///   статус всё ещё `notFound`, опция недоступна с причиной, пока система
+///   не покажет другой статус.
 ///
 /// Окно не трогает `WireGuardStatusModel`, тики, `serviceState` и
 /// `inFlightTunnels`.
@@ -150,6 +166,9 @@ public final class SettingsModel: ObservableObject {
     @Published public private(set) var isBusy = false
     /// Оконная ошибка последнего действия (фиксированная категория).
     @Published public private(set) var errorMessage: String?
+    /// Последний `register()` (успешный или нет) оставил статус `notFound`;
+    /// сбрасывается, как только система покажет любой другой статус.
+    @Published public private(set) var registerEndedNotFound = false
 
     private let loginItem: LoginItemManaging
     private let isAppBundle: Bool
@@ -162,7 +181,11 @@ public final class SettingsModel: ObservableObject {
     // MARK: Производное состояние для окна
 
     public var displayState: LaunchAtLoginDisplayState {
-        LaunchAtLoginDisplayState.derive(isAppBundle: isAppBundle, status: loginItemStatus)
+        LaunchAtLoginDisplayState.derive(
+            isAppBundle: isAppBundle,
+            status: loginItemStatus,
+            registerEndedNotFound: registerEndedNotFound
+        )
     }
 
     /// Переключатель включён только при `enabled` от системы.
@@ -208,7 +231,11 @@ public final class SettingsModel: ObservableObject {
             loginItemStatus = nil
             return
         }
-        loginItemStatus = loginItem.status
+        let status = loginItem.status
+        if status != .notFound {
+            registerEndedNotFound = false
+        }
+        loginItemStatus = status
     }
 
     /// Переключение пользователем. Статус перечитывается до решения; если
@@ -244,7 +271,7 @@ public final class SettingsModel: ObservableObject {
             }
             let result = failure
             await MainActor.run { [weak self] in
-                self?.finishOperation(failure: result)
+                self?.finishOperation(wasRegister: shouldRegister, failure: result)
             }
         }
     }
@@ -254,12 +281,15 @@ public final class SettingsModel: ObservableObject {
         loginItem.openSystemSettingsLoginItems()
     }
 
-    private func finishOperation(failure: LaunchAtLoginError?) {
+    private func finishOperation(wasRegister: Bool, failure: LaunchAtLoginError?) {
         isBusy = false
         if let failure {
             errorMessage = failure.userMessage
         }
         // После успеха и после сбоя: показываем то, что говорит система.
         refresh()
+        if wasRegister && loginItemStatus == .notFound {
+            registerEndedNotFound = true
+        }
     }
 }
