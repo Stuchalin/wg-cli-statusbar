@@ -9,6 +9,7 @@ enum StatusMenuAction: Int, Equatable {
     case quit = 4
     case installService = 5
     case uninstallService = 6
+    case settings = 7
 }
 
 /// Установка/удаление сервиса демона для диспетчеризации пунктов меню;
@@ -71,7 +72,10 @@ enum StatusMenuStructure {
     }
 
     /// Карточка → разделитель → Обновить/Конфиги → [Tunnels: заголовок +
-    /// строки] → разделитель → Сервис (по состоянию) → Выход.
+    /// строки] → разделитель → Сервис (по состоянию) → Настройки… → Выход.
+    /// «Настройки…» ⌘, — приложенческий пункт рядом с «Выход»: всегда
+    /// включён, туннельные операции и состояние сервиса его не касаются
+    /// (окно настроек не трогает демон и туннели).
     /// `refreshEnabled = false`, пока идёт refresh (спиннер в карточке);
     /// туннельная операция в полёте дополнительно отключает «Обновить»
     /// (подавленный тик — молчаливый no-op), все строки (одна операция за
@@ -102,6 +106,7 @@ enum StatusMenuStructure {
         }
         entries.append(.separator)
         entries.append(serviceEntry(for: serviceState, isEnabled: !hasInFlightTunnelOperation))
+        entries.append(.action(id: .settings, title: L10n.string("button.settings"), keyEquivalent: ",", modifiers: .command, isEnabled: true))
         entries.append(.action(id: .quit, title: L10n.string("button.quit"), keyEquivalent: "q", modifiers: .command, isEnabled: true))
         return entries
     }
@@ -206,6 +211,9 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// Вьювер конфига для кнопки деталей строки туннеля (продакшн —
     /// `ConfigViewerController`; nil — детали недоступны, клик — no-op).
     private let configViewer: ConfigViewing?
+    /// Окно настроек для пункта «Настройки…» (продакшн —
+    /// `SettingsWindowController`; nil — клик тихий no-op).
+    private let settings: SettingsPresenting?
     private let statusItem: NSStatusItem
     private var cancellable: AnyCancellable?
     /// Ответ `state` асинхронный: к моменту первой сборки меню список туннелей
@@ -226,10 +234,16 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
     /// (`menuNeedsUpdate` создаёт новый `NSHostingView` — `@State` вью сбрасывается).
     private var isLegendVisible = false
 
-    public init(model: WireGuardStatusModel, installer: ServiceInstalling, configViewer: ConfigViewing? = nil) {
+    public init(
+        model: WireGuardStatusModel,
+        installer: ServiceInstalling,
+        configViewer: ConfigViewing? = nil,
+        settings: SettingsPresenting? = nil
+    ) {
         self.model = model
         self.installer = installer
         self.configViewer = configViewer
+        self.settings = settings
         self.statusItem = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
         super.init()
 
@@ -508,13 +522,37 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         viewer.showConfig(named: name)
     }
 
+    /// Пункт «Настройки…»: тот же порядок, что у вьювера, — сначала
+    /// закрытие трекинга меню, затем показ и активация окна.
+    private func showSettingsWindow() {
+        Self.presentSettings(settings) { [weak self] in
+            guard let self else { return }
+            menu?.cancelTracking()
+            isMenuOpen = false
+        }
+    }
+
+    /// Открытие окна настроек — статически, как `presentConfigViewer`: без
+    /// окна — тихий no-op; с окном — сначала закрытие трекинга меню, только
+    /// затем показ (окно активируется и забирает фокус).
+    static func presentSettings(
+        _ settings: SettingsPresenting?,
+        cancelMenuTracking: () -> Void
+    ) {
+        guard let settings else { return }
+        cancelMenuTracking()
+        settings.showSettings()
+    }
+
     /// Диспетчеризация действий меню — статически, чтобы тестировать без
-    /// создания `NSStatusItem` (quit и установщик инжектятся: реальный
-    /// обработчик зовёт `NSApplication.terminate`, установщик — InstallerService).
+    /// создания `NSStatusItem` (quit, установщик и показ настроек инжектятся:
+    /// реальный обработчик зовёт `NSApplication.terminate`, установщик —
+    /// InstallerService, настройки — `presentSettings`).
     static func performStatusAction(
         _ action: StatusMenuAction,
         model: WireGuardStatusModel,
         installer: ServiceInstalling? = nil,
+        openSettings: () -> Void = {},
         quit: () -> Void
     ) {
         // Установка/удаление во время туннельной операции — молчаливый no-op:
@@ -543,6 +581,10 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
         case .uninstallService:
             guard let installer else { return }
             Task { await installer.uninstall() }
+        case .settings:
+            // Не гейтится туннельной операцией и состоянием сервиса: окно
+            // настроек не касается демона и туннелей.
+            openSettings()
         case .quit:
             quit()
         }
@@ -550,8 +592,12 @@ public final class StatusItemController: NSObject, NSMenuDelegate {
 
     @objc private func statusMenuAction(_ sender: NSMenuItem) {
         guard let action = StatusMenuAction(rawValue: sender.tag) else { return }
-        Self.performStatusAction(action, model: model, installer: installer) {
-            NSApplication.shared.terminate(nil)
-        }
+        Self.performStatusAction(
+            action,
+            model: model,
+            installer: installer,
+            openSettings: { [weak self] in self?.showSettingsWindow() },
+            quit: { NSApplication.shared.terminate(nil) }
+        )
     }
 }
