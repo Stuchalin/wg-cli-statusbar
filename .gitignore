@@ -17,3 +17,5 @@ xcuserdata/
 .cache-test/
 .claude/
 .ralphex/
+.agents/
+skills-lock.json
