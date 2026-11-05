@@ -146,6 +146,9 @@ final class ConfigViewerModelTests: XCTestCase {
         XCTAssertTrue(model.isLoading)
         XCTAssertEqual(model.displayedText, "")
         XCTAssertNil(model.errorMessage)
+        // Запрос уходит из detached-задачи — её старт асинхронен, поэтому
+        // ждём регистрации, а не проверяем синхронно (иначе гонка под нагрузкой).
+        waitUntil({ reader.pendingCount > 0 })
         XCTAssertEqual(reader.requestedNames, ["kvmka-ai"])
     }
 

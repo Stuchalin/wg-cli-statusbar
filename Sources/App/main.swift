@@ -34,7 +34,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         )
         let viewerController = ConfigViewerController(model: viewerModel)
         configViewerController = viewerController
-        statusItemController = StatusItemController(model: model, installer: installer, configViewer: viewerController)
+        // Окно настроек: продакшн-граница SMAppService и факт «запущено из
+        // .app-бандла» собираются здесь, логика — в SettingsModel.
+        let settingsModel = SettingsModel(
+            loginItem: SMAppServiceLoginItem(),
+            isAppBundle: isRunningFromAppBundle(bundleURL: Bundle.main.bundleURL)
+        )
+        let settingsController = SettingsWindowController(model: settingsModel)
+        statusItemController = StatusItemController(
+            model: model,
+            installer: installer,
+            configViewer: viewerController,
+            settings: settingsController
+        )
     }
     private var configViewerController: ConfigViewerController?
 

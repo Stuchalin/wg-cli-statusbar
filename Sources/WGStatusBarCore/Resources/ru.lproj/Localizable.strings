@@ -83,3 +83,16 @@
 "config.editor.file_menu" = "Файл";
 
 "config.editor.error.unsafe_configuration" = "Конфиг нельзя безопасно редактировать с текущим владельцем или правами. Менять права Homebrew не нужно.";
+
+/* Settings window */
+"settings.launch_at_login.error.register_failed" = "Не удалось включить запуск при входе";
+"settings.launch_at_login.error.unregister_failed" = "Не удалось выключить запуск при входе";
+"settings.launch_at_login.unavailable.not_in_bundle" = "Доступно только при запуске из установленного бандла приложения";
+"settings.launch_at_login.unavailable.not_found" = "macOS не находит приложение как объект входа";
+"settings.launch_at_login.unavailable.unknown" = "Статус объекта входа неизвестен";
+"button.settings" = "Настройки…";
+"settings.window.title" = "Настройки";
+"settings.section.general" = "Основные";
+"settings.launch_at_login.toggle" = "Запускать при входе";
+"settings.launch_at_login.approval_hint" = "Запуск при входе ждёт вашего разрешения в Системных настройках → Основные → Объекты входа.";
+"settings.launch_at_login.open_login_items" = "Открыть объекты входа";
