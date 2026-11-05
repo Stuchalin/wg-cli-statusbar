@@ -4,7 +4,7 @@ Status: implementation complete and archived. Automated tests pass; deployment a
 
 ## Cause
 
-On this machine, `/opt/homebrew` and `/opt/homebrew/etc/wireguard` are owned by uid 501; `/opt/homebrew/etc` has mode 0775. All four `.conf` files are owned by uid 501 (groups staff/admin, mode 0644). The editor incorrectly applies a root-only policy to all configs. Synthetic root-owned QA did not cover this.
+Affected Homebrew layout: `/opt/homebrew` and `/opt/homebrew/etc/wireguard` are user-owned, `/opt/homebrew/etc` is 0775, and configuration files are user-owned 0644 with staff/admin groups. The editor incorrectly applied a root-only policy. Synthetic root-owned QA did not cover this layout.
 
 ## Solution
 
