@@ -105,7 +105,7 @@ Acceptance: tests for a down→up transition between opening the editor and Save
 
 ## Implementation Evidence
 
-Stage 1: after user permission, a separate root-probe was performed through the standard macOS administrator prompt. Root ↔ regular user, rejection of an actual unrelated UID, truncation/timeout/cancellation, and namespace cleanup — PASS. The installed helper and WireGuard configs were not changed. Details: [config-editor-transport-review.md](../config-editor-transport-review.md).
+Stage 1: after user permission, a separate root-probe was performed through the standard macOS administrator prompt. Root ↔ regular user, rejection of an actual unrelated UID, truncation/timeout/cancellation, and namespace cleanup — PASS. The installed helper and WireGuard configs were not changed. Details: [config-editor-transport-review.md](config-editor-transport-review.md).
 
 Stage 2: added SecureConfigFileSystem, TunnelOperationLock, and TunnelConfigEditor. 18 tests cover exact bytes, revisions, conflicts during staging, atomic replacement, 0600 permissions, unsafe files/paths, tunnel activity, cancellation, short/failed writes, and unknown commit outcome. The filesystem core is now connected through a separate root one-shot API and editor UI; the initial test set has been expanded with integration scenarios.
 
@@ -138,4 +138,4 @@ Finding fixed without changing the tolerant display/status reader. A standalone 
 
 ## Authorized installed acceptance
 
-See [config-editor-installed-acceptance.md](../config-editor-installed-acceptance.md): installed helper 21 verified, real authenticated API Save/conflict/reload and production-window Save/Cancel/dirty-close checks passed. The synthetic config was removed; existing tunnel states and the active connection were unchanged. Helper/unified log canary checks passed within the documented scope. VoiceOver and the remaining GUI conflict sequence were stopped at the user's request; no further password scenarios are planned. Command-routing regressions pass in the 578-test full suite.
+See [config-editor-installed-acceptance.md](config-editor-installed-acceptance.md): installed helper 21 verified, real authenticated API Save/conflict/reload and production-window Save/Cancel/dirty-close checks passed. The synthetic config was removed; existing tunnel states and the active connection were unchanged. Helper/unified log canary checks passed within the documented scope. VoiceOver and the remaining GUI conflict sequence were stopped at the user's request; no further password scenarios are planned. Command-routing regressions pass in the 578-test full suite.

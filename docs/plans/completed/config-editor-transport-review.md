@@ -1,8 +1,8 @@
 # Review and initial implementation of the editor: transport
 
-This is a historical implementation/acceptance log. The current implementation is helper build 22; the completed plans are [editor](completed/config-editor.md) and [Homebrew support](completed/homebrew-config-editing.md). Earlier limitations below describe their respective stages, not the final code.
+This is a historical implementation/acceptance log. The current implementation is helper build 22; the completed plans are [editor](config-editor.md) and [Homebrew support](homebrew-config-editing.md). Earlier limitations below describe their respective stages, not the final code.
 
-Branch: `feat/config-editor`. Main plan: [config-editor.md](completed/config-editor.md).
+Branch: `feat/config-editor`. Main plan: [config-editor.md](config-editor.md).
 
 ## Review decision
 
