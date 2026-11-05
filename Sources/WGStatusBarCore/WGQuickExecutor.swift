@@ -123,8 +123,10 @@ public final class WGQuickExecutor: WGQuickExecuting {
         ),
         timeout: TimeInterval = WGQuickExecutor.defaultOpTimeout,
         killGrace: TimeInterval = WGQuickExecutor.defaultKillGrace,
-        tunnelUpProbe: ((String) -> Bool)? = nil
+        tunnelUpProbe: ((String) -> Bool)? = nil,
+        synchronizeConfigEdits: Bool = true
     ) {
+        self.synchronizeConfigEdits = synchronizeConfigEdits
         self.resolver = resolver
         self.timeout = timeout
         self.killGrace = killGrace
@@ -156,6 +158,11 @@ public final class WGQuickExecutor: WGQuickExecuting {
         guard let binaryPath = resolver.resolve() else {
             throw WGQuickExecutorError.quickMissing
         }
+
+        let lease: TunnelOperationLease?
+        do { lease = synchronizeConfigEdits ? try await operationLock.acquireAsync(named: arguments[1]) : nil }
+        catch { throw WGQuickExecutorError.failed("tunnel operation lock unavailable") }
+        defer { lease?.release() }
 
         // Под launchd наследовать окружение демона нельзя: без brew-директорий
         // в PATH wg-quick погибает на shebang `env bash` (системный 3.2).
@@ -326,4 +333,7 @@ public final class WGQuickExecutor: WGQuickExecuting {
             ? String(trimmed.suffix(stderrDetailLimit))
             : trimmed
     }
+    private let synchronizeConfigEdits: Bool
+    var operationLock = TunnelOperationLock(directoryPath: TunnelOperationLock.directory,
+        fileSystem: SecureConfigFileSystem(ownerUID: 0, allowTemporaryRoot: false))
 }

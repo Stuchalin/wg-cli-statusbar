@@ -36,7 +36,8 @@ final class WGQuickExecutorTests: XCTestCase {
             ),
             timeout: timeout,
             killGrace: killGrace,
-            tunnelUpProbe: tunnelUpProbe
+            tunnelUpProbe: tunnelUpProbe,
+            synchronizeConfigEdits: false
         )
     }
 
@@ -872,5 +873,28 @@ final class WGQuickExecutorTests: XCTestCase {
             Thread.sleep(forTimeInterval: 0.05)
         }
         return false
+    }
+
+    func testConfigWriteLeaseBlocksExecutorUntilReleased() async throws {
+        let root = "/private/tmp/wgql-" + String(UUID().uuidString.prefix(8))
+        try FileManager.default.createDirectory(atPath: root, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(atPath: root) }
+        let marker = root + "/ran"
+        let stub = try makeStub(script: "touch " + marker)
+        defer { try? FileManager.default.removeItem(atPath: stub) }
+        let lock = TunnelOperationLock(directoryPath: root + "/locks",
+            fileSystem: SecureConfigFileSystem(ownerUID: geteuid(), allowTemporaryRoot: true))
+        let executor = WGQuickExecutor(resolver: WGQuickResolver(searchPaths: [stub], fileExists: { _ in true }))
+        executor.operationLock = lock
+        let lease = try lock.acquire(named: "work")
+        defer { lease.release() }
+        do {
+            try await executor.runDown(name: "work")
+            XCTFail("wg-quick ran while the config lease was held")
+        } catch {}
+        XCTAssertFalse(FileManager.default.fileExists(atPath: marker))
+        lease.release()
+        try await executor.runDown(name: "work")
+        XCTAssertTrue(FileManager.default.fileExists(atPath: marker))
     }
 }

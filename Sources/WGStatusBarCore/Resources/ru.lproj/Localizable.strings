@@ -55,3 +55,31 @@
 "config.error.load_failed" = "Не удалось загрузить конфигурацию";
 "config.error.unavailable" = "Конфигурация недоступна";
 "tunnel.accessibility.details" = "Показать конфигурацию %@";
+
+/* Authenticated configuration editor */
+"config.editor.edit" = "Редактировать";
+"config.editor.save" = "Сохранить";
+"config.editor.cancel" = "Отмена";
+"config.editor.badge" = "Редактирование";
+"config.editor.saving" = "Сохранение…";
+"config.editor.opening" = "Авторизация…";
+"config.editor.modified" = "Есть несохранённые изменения";
+"config.editor.unmodified" = "Изменений нет";
+"config.editor.warning" = "Хуки конфига выполняются от root. Синтаксис не проверяется. Сохраняйте только отключённый туннель; подключайте отдельно. Внешний wg-quick/SaveConfig может перезаписать изменения.";
+"config.editor.accessibility.text" = "Редактор конфигурации WireGuard";
+"config.editor.discard.title" = "Отменить несохранённые изменения?";
+"config.editor.discard.message" = "Черновик будет удалён. Файл на диске не изменится.";
+"config.editor.discard.keep" = "Продолжить редактирование";
+"config.editor.discard.confirm" = "Отменить изменения";
+"config.auth.edit_reason" = "Чтение полного конфига WireGuard для редактирования";
+"config.auth.save_reason" = "Сохранение конфига WireGuard, включая хуки, выполняемые от root";
+"config.editor.error.unavailable" = "Редактирование недоступно. Проверьте сервис и права файла.";
+"config.editor.error.invalid_document" = "Документ должен быть UTF-8, не больше 256 КиБ и без символов NUL.";
+"config.editor.error.conflict" = "Файл изменился. Сохраните черновик отдельно или перечитайте файл; ничего не перезаписано.";
+"config.editor.error.active_tunnel" = "Перед сохранением отключите туннель, затем перечитайте конфиг.";
+"config.editor.error.busy" = "Выполняется операция с туннелем. Повторите после её завершения.";
+"config.editor.error.unknown_commit" = "Сохранение не удалось подтвердить. Перечитайте и проверьте файл перед новой попыткой.";
+
+"config.editor.file_menu" = "Файл";
+
+"config.editor.error.unsafe_configuration" = "Конфиг нельзя безопасно редактировать с текущим владельцем или правами. Менять права Homebrew не нужно.";

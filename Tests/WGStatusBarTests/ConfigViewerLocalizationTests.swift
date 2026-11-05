@@ -35,7 +35,31 @@ final class ConfigViewerLocalizationTests: XCTestCase {
         "tunnel.accessibility.details",
         "tunnel.accessibility.on",
         "tunnel.accessibility.off",
-    ]
+            "config.editor.edit",
+        "config.editor.save",
+        "config.editor.cancel",
+        "config.editor.badge",
+        "config.editor.saving",
+        "config.editor.opening",
+        "config.editor.modified",
+        "config.editor.unmodified",
+        "config.editor.warning",
+        "config.editor.accessibility.text",
+        "config.editor.discard.title",
+        "config.editor.discard.message",
+        "config.editor.discard.keep",
+        "config.editor.discard.confirm",
+        "config.auth.edit_reason",
+        "config.auth.save_reason",
+        "config.editor.error.unavailable",
+        "config.editor.error.invalid_document",
+        "config.editor.error.conflict",
+        "config.editor.error.active_tunnel",
+        "config.editor.error.busy",
+        "config.editor.error.unknown_commit",
+        "config.editor.file_menu",
+        "config.editor.error.unsafe_configuration",
+]
 
     /// Заголовок окна подставляет имя туннеля — формат обязан сохраниться
     /// в обеих таблицах.

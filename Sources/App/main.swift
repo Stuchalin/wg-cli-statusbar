@@ -29,10 +29,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewerModel = ConfigViewerModel(
             maskedReader: SocketConfigClient(),
             revealExecutor: PrivilegedConfigReader(),
-            serviceStateProvider: { [weak model] in model?.serviceState ?? .absent }
+            serviceStateProvider: { [weak model] in model?.serviceState ?? .absent },
+            editExecutor: PrivilegedConfigEditor()
         )
         let viewerController = ConfigViewerController(model: viewerModel)
+        configViewerController = viewerController
         statusItemController = StatusItemController(model: model, installer: installer, configViewer: viewerController)
+    }
+    private var configViewerController: ConfigViewerController?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        configViewerController?.prepareForApplicationTermination() == false ? .terminateCancel : .terminateNow
     }
 }
 

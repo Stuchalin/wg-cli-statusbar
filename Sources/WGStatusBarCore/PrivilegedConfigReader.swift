@@ -341,30 +341,16 @@ public struct ProcessPrivilegedRunner: PrivilegedProcessRunning {
 
 /// Снимок lstat для префлайта: тип записи, владелец и биты прав.
 public struct PrivilegedHelperStatEntry: Equatable {
-    /// Тип записи — ровно один факт из `st_mode & S_IFMT`, а не набор булевых
-    /// (комбинация «каталог и обычный файл одновременно» невыразима).
-    public enum Kind: Equatable {
-        case symbolicLink
-        case directory
-        case regularFile
-        /// FIFO, устройство, сокет и прочее.
-        case other
-    }
-
+    public enum Kind: Equatable { case symbolicLink, directory, regularFile, other }
     public let kind: Kind
-    /// uid владельца; root == 0.
     public let ownerUID: Int
-    /// Биты прав без типа файла (st_mode & 0o7777).
     public let permissions: Int
-
-    public init(
-        kind: Kind,
-        ownerUID: Int,
-        permissions: Int
-    ) {
+    public let hasExtendedACL: Bool
+    public init(kind: Kind, ownerUID: Int, permissions: Int, hasExtendedACL: Bool = false) {
         self.kind = kind
         self.ownerUID = ownerUID
         self.permissions = permissions
+        self.hasExtendedACL = hasExtendedACL
     }
 }
 
@@ -392,10 +378,15 @@ public struct PosixPrivilegedHelperProbingFileSystem: PrivilegedHelperProbingFil
         default:
             kind = .other
         }
+        errno = 0
+        let acl = acl_get_link_np(path, ACL_TYPE_EXTENDED)
+        let hasExtendedACL = acl != nil || errno != ENOENT
+        if let acl { acl_free(UnsafeMutableRawPointer(acl)) }
         return PrivilegedHelperStatEntry(
             kind: kind,
             ownerUID: Int(status.st_uid),
-            permissions: Int(status.st_mode & 0o7777)
+            permissions: Int(status.st_mode & 0o7777),
+            hasExtendedACL: hasExtendedACL
         )
     }
 }
@@ -612,7 +603,7 @@ public final class PrivilegedConfigReader: ConfigRevealExecuting {
     static func preflightDirectoryFailure(_ entry: PrivilegedHelperStatEntry?) -> PrivilegedConfigError? {
         guard let entry else { return .helperUnavailable }
         guard entry.kind == .directory else { return .helperUnavailable }
-        guard entry.ownerUID == 0 else { return .helperUnavailable }
+        guard entry.ownerUID == 0, !entry.hasExtendedACL else { return .helperUnavailable }
         guard entry.permissions & unsafeWritableBits == 0 else { return .helperUnavailable }
         return nil
     }
@@ -622,7 +613,7 @@ public final class PrivilegedConfigReader: ConfigRevealExecuting {
     static func preflightBinaryFailure(_ entry: PrivilegedHelperStatEntry?) -> PrivilegedConfigError? {
         guard let entry else { return .helperUnavailable }
         guard entry.kind == .regularFile else { return .helperUnavailable }
-        guard entry.ownerUID == 0 else { return .helperUnavailable }
+        guard entry.ownerUID == 0, !entry.hasExtendedACL else { return .helperUnavailable }
         guard entry.permissions & unsafeWritableBits == 0 else { return .helperUnavailable }
         guard entry.permissions & 0o100 != 0 else { return .helperUnavailable }
         return nil
