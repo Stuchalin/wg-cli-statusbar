@@ -20,8 +20,10 @@ let package = Package(
         )
     ],
     targets: [
+        .target(name: "ConfigEditPOSIX", path: "Sources/ConfigEditPOSIX", publicHeadersPath: "include"),
         .target(
             name: "WGStatusBarCore",
+            dependencies: ["ConfigEditPOSIX"],
             path: "Sources/WGStatusBarCore",
             resources: [
                 .process("Resources")
@@ -39,7 +41,7 @@ let package = Package(
         ),
         .testTarget(
             name: "WGStatusBarTests",
-            dependencies: ["WGStatusBarCore"],
+            dependencies: ["WGStatusBarCore", "ConfigEditPOSIX"],
             path: "Tests"
         ),
     ]

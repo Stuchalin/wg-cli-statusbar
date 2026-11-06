@@ -29,9 +29,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let viewerModel = ConfigViewerModel(
             maskedReader: SocketConfigClient(),
             revealExecutor: PrivilegedConfigReader(),
-            serviceStateProvider: { [weak model] in model?.serviceState ?? .absent }
+            serviceStateProvider: { [weak model] in model?.serviceState ?? .absent },
+            editExecutor: PrivilegedConfigEditor()
         )
         let viewerController = ConfigViewerController(model: viewerModel)
+        configViewerController = viewerController
         // Окно настроек: продакшн-граница SMAppService и факт «запущено из
         // .app-бандла» собираются здесь, логика — в SettingsModel.
         let settingsModel = SettingsModel(
@@ -45,6 +47,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             configViewer: viewerController,
             settings: settingsController
         )
+    }
+    private var configViewerController: ConfigViewerController?
+
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        configViewerController?.prepareForApplicationTermination() == false ? .terminateCancel : .terminateNow
     }
 }
 

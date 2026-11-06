@@ -55,6 +55,36 @@
 "config.error.load_failed" = "Could not load the configuration";
 "config.error.unavailable" = "The configuration is unavailable";
 "tunnel.accessibility.details" = "Show configuration %@";
+
+/* Authenticated configuration editor */
+"config.editor.edit" = "Edit";
+"config.editor.save" = "Save";
+"config.editor.cancel" = "Cancel";
+"config.editor.badge" = "Editing";
+"config.editor.saving" = "Saving…";
+"config.editor.opening" = "Authorizing…";
+"config.editor.modified" = "Unsaved changes";
+"config.editor.unmodified" = "No changes";
+"config.editor.warning" = "Config hooks run as root. Syntax is not validated. Save only while disconnected; reconnect separately. External wg-quick/SaveConfig may overwrite edits.";
+"config.editor.accessibility.text" = "WireGuard configuration editor";
+"config.editor.discard.title" = "Discard unsaved changes?";
+"config.editor.discard.message" = "Your draft will be discarded. The file on disk will not change.";
+"config.editor.discard.keep" = "Keep editing";
+"config.editor.discard.confirm" = "Discard changes";
+"config.auth.edit_reason" = "Read the full WireGuard configuration for editing";
+"config.auth.save_reason" = "Save the WireGuard configuration, including root-executed hooks";
+"config.editor.error.unavailable" = "Configuration editing is unavailable. Check the service and file permissions.";
+"config.editor.error.invalid_document" = "The document must be UTF-8, at most 256 KiB, with no NUL characters.";
+"config.editor.error.conflict" = "The file changed. Keep your draft or reload; nothing was overwritten.";
+"config.editor.error.active_tunnel" = "Disconnect the tunnel before saving, then reload the configuration.";
+"config.editor.error.busy" = "A tunnel operation is in progress. Try again after it finishes.";
+"config.editor.error.unknown_commit" = "Save could not be confirmed. Reload and inspect the file before trying again.";
+
+"config.editor.file_menu" = "File";
+
+"config.editor.error.unsafe_configuration" = "This configuration cannot be edited safely with its current owner or permissions. Homebrew permissions do not need to be changed.";
+
+/* Settings window */
 "settings.launch_at_login.error.register_failed" = "Could not turn on launch at login";
 "settings.launch_at_login.error.unregister_failed" = "Could not turn off launch at login";
 "settings.launch_at_login.unavailable.not_in_bundle" = "Available only when running from the installed app bundle";

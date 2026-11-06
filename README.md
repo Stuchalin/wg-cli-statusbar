@@ -19,9 +19,10 @@ A minimal macOS menu-bar app for WireGuard: live tunnel status in the menu bar a
   spinner, the other rows' toggles are disabled until the op finishes (the per-row document
   button stays available). Changes made outside the app (`wg-quick` in a terminal) are reflected
   within 5 s.
-- **Read-only config viewer** — a small document button beside each tunnel row opens one reusable
-  window with that tunnel's `.conf`: the full text, monospaced, selectable and copyable, never
-  editable. Values of canonical `PrivateKey`/`PresharedKey` assignments are masked by default;
+- **Config viewer and editor** — a document button beside each tunnel opens one reusable
+  window. Read-only and masked by default; **Edit** opens a freshly authenticated full document.
+  Existing files can be saved after a separate fresh authentication. Values of canonical
+  `PrivateKey`/`PresharedKey` assignments are masked in the default view;
   **Reveal secrets** re-reads the raw file after a fresh Touch ID / Apple Watch / password check
   (see [Config viewer](#config-viewer)).
 - **One-time service install** from the menu: a small privileged daemon, installed with a single
@@ -82,8 +83,25 @@ order the app uses for the tunnel list.
 - **Hide secrets** returns to the masked document without re-reading; **Reload** re-reads the
   file (masked again); closing the window or opening another tunnel discards the revealed text
   from the window.
-- The document is read-only — the app never edits or writes configuration files.
-- **Stale helper.** Reveal requires a current helper. If the installed one is missing, unsafe or
+- **Edit / Save / Cancel** (helper build 22+). Edit freshly reads the full document after owner
+  authentication; masked placeholders are never written back. Save authenticates again, refuses
+  active tunnels, checks the original revision and atomically replaces the file with mode `0600`.
+  Activity must be positively established: missing/unreadable runtime directories, unreadable or
+  malformed records, and missing/stale socket metadata block Save instead of implying a down tunnel.
+  Disconnect first, then reload before editing: external `wg-quick` / `SaveConfig=true` may rewrite
+  the file. Saving never runs hooks or reconnects a tunnel. Syntax is not validated; empty files
+  are allowed. Cmd-S saves, Escape cancels; closing, Reload, Hide, switching tunnels and Quit
+  confirm unsaved changes. A save already submitted to root is not cancellable; ambiguous results
+  disable retry until reload. Authentication cancellation preserves the draft.
+- Root-owned configs retain the strict root-owned-directory policy. User-owned Homebrew configs
+  are edited in a separate process permanently dropped to that user and their groups; root never
+  writes document bytes into user-writable directories. Owner and group are preserved, and the
+  saved file is `0600`. Root still holds the shared operation lock and checks activity twice.
+  Homebrew directory ownership/permissions are not changed. World-writable directories, unsafe
+  file permissions, other users' files, ACLs, symlinks, hard links and special files are rejected.
+- Conflicts retain your draft and do not overwrite another change. There is no force-save,
+  automatic merge, creation, deletion or renaming. The editor does not keep undo history.
+- **Stale helper.** Reveal and editing require a current helper. If the installed one is missing, unsafe or
   older than the app expects, Reveal shows an install/update-service hint and no authentication
   prompt appears until the service is updated from the menu.
 
@@ -95,16 +113,21 @@ order the app uses for the tunnel list.
   hides **only** the values of canonical `PrivateKey`/`PresharedKey` assignments — identical or
   unrelated sensitive text in comments, hook commands and unknown directives is shown as-is,
   because nothing beyond canonical key assignments can be identified reliably.
-- After an authenticated Reveal the complete raw file content enters the app's memory until it
+- After an authenticated Reveal or Edit the complete raw file content enters the app's memory until it
   is cleared from the window (Hide/Reload/close/switch). Swift cannot guarantee physical
   zeroing of every string copy, and text the user copies to the clipboard stays there — that
   copy is outside the app's control.
-- Raw config text is reachable only through the explicit authenticated one-shot read, which
+- Raw configuration and writes use explicit authenticated one-shot operations, which
   executes just the root-owned helper installed at
   `/Library/PrivilegedHelperTools/com.stuchalin.wgstatusbar.helper` (its ownership and
   permissions are verified before any prompt appears) — never the user-writable copy bundled
   with the app. The daemon's long-lived socket has **no** command that returns raw
-  configuration.
+  configuration or accepts a write command. Editor sessions use a separate ephemeral root-owned
+  socket namespace, kernel UID/PID checks in both directions and bounded framing. Document bytes
+  never appear in command arguments, AppleScript, environment variables or editor logs.
+- App saves and app up/down share a per-tunnel root-owned lock. External root tools do not honor
+  that lock; POSIX rename is atomic replacement, not compare-and-swap against external root writers.
+  An interrupted writer may leave a root-only `0600` staging file; ordinary errors clean it up.
 - The installer runs a root shell script that lives in the user-writable app bundle — a TOCTOU
   window that is deliberately not closed with checksums (accepted for an open-source tool with a
   technical audience; the proper fix is Developer ID + `SMAppService`, future work).

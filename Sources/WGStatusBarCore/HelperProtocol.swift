@@ -12,7 +12,10 @@ public let helperProtocolVersion = 1
 /// бинаря (`--capabilities`, `--print-config-raw`): протокол сокета не менялся,
 /// но префлайт Reveal обязан отсечь бинарь без этих флагов — билд 18 на пробе
 /// `--capabilities` просто стартовал бы второй демон.
-public let helperBuildNumber = 19
+/// Build 20 adds authenticated editor one-shot sessions and shared save/up/down locking.
+/// Build 21 refuses Save when runtime activity metadata is unavailable or ambiguous.
+/// Build 22 delegates user-owned Homebrew configuration I/O to a permanently unprivileged worker.
+public let helperBuildNumber = 22
 
 /// Запрос приложения к демону (line-based: соединение = один запрос).
 public enum HelperRequest {

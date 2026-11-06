@@ -17,26 +17,38 @@ public enum HelperLaunchMode: Equatable {
     case printConfigRaw(String)
     /// Любая другая форма argv — отклоняется до какого-либо доступа к FS.
     case invalid
+    case configEditCapabilities
+    case configEdit(ConfigEditLaunch)
+    case userConfigEdit(name: String, saving: Bool, directoryIndex: Int)
 }
 
-/// Разбор argv хелпера: строго три допустимые формы (без аргументов /
-/// `--capabilities` / `--print-config-raw <name>` c непустым единственным
-/// аргументом), всё прочее — `.invalid`, ещё до обращения к файловой системе.
-/// Shape-валидация имени здесь не делается — это работа `TunnelConfigReader`
-/// (общая с wg-quick), отказ fail-closed.
+/// Старые daemon/capabilities/raw-read формы сохраняются. Редактор использует
+/// отдельные capability/read/write формы с точными UID/PID/UUID аргументами.
+/// Некорректные формы отвергаются до файловой системы; editor-имена валидируются
+/// здесь, raw-read по-прежнему использует общий TunnelConfigReader.
 public func parseHelperArgv(_ arguments: [String]) -> HelperLaunchMode {
     switch arguments.count {
-    case 0:
-        return .daemon
+    case 0: return .daemon
     case 1:
-        return arguments[0] == "--capabilities" ? .capabilities : .invalid
+        if arguments[0] == "--capabilities" { return .capabilities }
+        return arguments[0] == "--config-edit-capabilities" ? .configEditCapabilities : .invalid
     case 2:
-        guard arguments[0] == "--print-config-raw", !arguments[1].isEmpty else {
-            return .invalid
-        }
+        guard arguments[0] == "--print-config-raw", !arguments[1].isEmpty else { return .invalid }
         return .printConfigRaw(arguments[1])
-    default:
-        return .invalid
+    case 4:
+        guard arguments[0] == "--user-config-edit", TunnelConfigStore.isNameShapeValid(arguments[1]),
+              arguments[2] == "read" || arguments[2] == "save",
+              let index = Int(arguments[3]), String(index) == arguments[3], TunnelConfigEditor.searchPaths.indices.contains(index) else { return .invalid }
+        return .userConfigEdit(name: arguments[1], saving: arguments[2] == "save", directoryIndex: index)
+    case 5:
+        guard arguments[0] == "--read-config-edit" || arguments[0] == "--write-config-edit",
+              TunnelConfigStore.isNameShapeValid(arguments[1]),
+              let uid = uid_t(arguments[2]), uid > 0, String(uid) == arguments[2],
+              let pid = pid_t(arguments[3]), pid > 0, String(pid) == arguments[3],
+              UUID(uuidString: arguments[4])?.uuidString == arguments[4] else { return .invalid }
+        return .configEdit(ConfigEditLaunch(name: arguments[1], clientUID: uid, clientPID: pid,
+            session: arguments[4], saving: arguments[0] == "--write-config-edit"))
+    default: return .invalid
     }
 }
 

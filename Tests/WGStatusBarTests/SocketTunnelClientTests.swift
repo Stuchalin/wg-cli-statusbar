@@ -327,6 +327,11 @@ final class SocketTunnelClientTests: XCTestCase {
             resolver: WGQuickResolver(searchPaths: [stubPath], fileExists: { _ in true }),
             tunnelUpProbe: { _ in true }
         )
+        let lockRoot = "/private/tmp/wgex-" + String(UUID().uuidString.prefix(8))
+        try FileManager.default.createDirectory(atPath: lockRoot, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
+        defer { try? FileManager.default.removeItem(atPath: lockRoot) }
+        executor.operationLock = TunnelOperationLock(directoryPath: lockRoot + "/locks",
+            fileSystem: SecureConfigFileSystem(ownerUID: geteuid(), allowTemporaryRoot: true))
         let socketPath = makeSocketPath()
         try await startServer(
             socketPath: socketPath,

@@ -41,6 +41,12 @@ case .printConfigRaw(let name):
         FileHandle.standardError.write(Data((stderrLine + "\n").utf8))
         exit(exitStatus)
     }
+case .configEditCapabilities:
+    FileHandle.standardOutput.write(Data(helperConfigEditCapabilitiesOutput().utf8))
+case .configEdit(let launch):
+    exit(runHelperConfigEditSession(launch))
+case .userConfigEdit(let name, let saving, let index):
+    exit(runHelperUserConfigEditWorker(named: name, saving: saving, directoryIndex: index))
 case .invalid:
     FileHandle.standardError.write(Data("wgstatusbar: invalid arguments\n".utf8))
     exit(2)
